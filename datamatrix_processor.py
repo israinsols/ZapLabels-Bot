@@ -8,55 +8,92 @@ import re
 class DataMatrixProcessor:
     
     @staticmethod
-    def detect_datamatrix(image_path):
+    def detect_datamatrix(image_input):
         """
-        Step 1: Label se Data Matrix detect karo
+        Step 1: Label se Data Matrix detect karo (Supports Image paths, PDF files, and numpy arrays)
         """
-        # Read image
-        img = cv2.imread(image_path)
+        import os
+        if isinstance(image_input, np.ndarray):
+            img = image_input
+        elif isinstance(image_input, str):
+            ext = os.path.splitext(image_input)[1].lower()
+            if ext == ".pdf":
+                try:
+                    import fitz
+                    doc = fitz.open(image_input)
+                    page = doc[0]
+                    mat = fitz.Matrix(300 / 72, 300 / 72)
+                    pix = page.get_pixmap(matrix=mat, colorspace=fitz.csRGB)
+                    arr = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, 3)
+                    img = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
+                    doc.close()
+                except Exception as e:
+                    raise RuntimeError(f"PDF open failed: {e}")
+            else:
+                img = cv2.imread(image_input)
+        else:
+            raise ValueError("❌ Invalid image input")
+
         if img is None:
             raise ValueError("❌ Image not found or invalid")
-        
+
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        
+        img_h, img_w = gray.shape
+
+        decoded = None
         scale = 1
-        # ===== ENHANCE IMAGE FOR BETTER DETECTION =====
-        # Method 1: Try original
+        roi_offset_x, roi_offset_y = 0, 0
+
+        # Method 1: Try original full image
         decoded = decode(Image.fromarray(gray))
-        
-        # Method 2: Try resized
+
+        # Method 2: Try ROI (Top-left 25% to 55% height, 5% to 40% width)
+        if not decoded:
+            rx1 = int(img_w * 0.04)
+            ry1 = int(img_h * 0.20)
+            rx2 = int(img_w * 0.45)
+            ry2 = int(img_h * 0.60)
+            roi = gray[ry1:ry2, rx1:rx2]
+            dec_roi = decode(Image.fromarray(roi))
+            if dec_roi:
+                decoded = dec_roi
+                roi_offset_x, roi_offset_y = rx1, ry1
+                gray_target_h = roi.shape[0]
+
+        # Method 3: Try 2x resized
         if not decoded:
             scale = 2
             width = int(gray.shape[1] * scale)
             height = int(gray.shape[0] * scale)
             resized = cv2.resize(gray, (width, height), interpolation=cv2.INTER_CUBIC)
             decoded = decode(Image.fromarray(resized))
-        
-        # Method 3: Try threshold
+
+        # Method 4: Try thresholding
         if not decoded:
             scale = 1
             _, thresh = cv2.threshold(gray, 150, 255, cv2.THRESH_BINARY)
             decoded = decode(Image.fromarray(thresh))
-        
-        # Method 4: Try adaptive threshold
+
+        # Method 5: Try adaptive thresholding
         if not decoded:
             scale = 1
             thresh = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
             decoded = decode(Image.fromarray(thresh))
-        
+
         if not decoded:
             raise ValueError("❌ No Data Matrix found in image")
-        
-        # Get position (pylibdmtx top is measured from bottom of image, and adjust for scale)
+
+        # Get position (pylibdmtx top is measured from bottom of the image passed to decode)
         rect = decoded[0].rect
-        x = int(rect.left / scale)
+        base_h = gray_target_h if roi_offset_x > 0 else img_h
+
+        x = int(rect.left / scale) + roi_offset_x
         top_from_bottom = int(rect.top / scale)
         w = int(rect.width / scale)
         h = int(rect.height / scale)
-        y = img.shape[0] - top_from_bottom - h
-        
-        print(f"✅ Data Matrix detected at position: ({x}, {y}) size: {w}x{h} (scale={scale})")
-        
+        y = (base_h - top_from_bottom - h) + roi_offset_y
+
+        print(f"✅ Data Matrix detected at position: ({x}, {y}) size: {w}x{h}")
         return decoded[0], (x, y, w, h), img
     
     @staticmethod
