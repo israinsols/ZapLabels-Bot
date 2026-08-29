@@ -359,6 +359,16 @@ def update_datamatrix(img, input_img_or_path, warehouse):
 
         if new_dm is not None:
             x, y, bw, bh = bbox
+
+            # Wipe old DataMatrix and any surrounding dotted frame completely with white
+            pad_x = max(6, int(bw * 0.10))
+            pad_y = max(6, int(bh * 0.10))
+            x1 = max(0, x - pad_x)
+            y1 = max(0, y - pad_y)
+            x2 = min(img.shape[1], x + bw + pad_x)
+            y2 = min(img.shape[0], y + bh + pad_y)
+            cv2.rectangle(img, (x1, y1), (x2, y2), (255, 255, 255), -1)
+
             if len(img.shape) == 3:
                 new_dm_3ch = cv2.cvtColor(new_dm, cv2.COLOR_GRAY2BGR)
                 if new_dm_3ch.shape[:2] != (bh, bw):
