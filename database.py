@@ -12,13 +12,17 @@ class Database:
     
     async def connect(self):
         try:
-            self.pool = await asyncpg.create_pool(
-                user=os.getenv("DB_USER", "postgres"),
-                password=os.getenv("DB_PASSWORD", "admin123"),
-                database=os.getenv("DB_NAME", "zaplabels"),
-                host=os.getenv("DB_HOST", "localhost"),
-                port=os.getenv("DB_PORT", 5432)
-            )
+            db_url = os.getenv("DATABASE_URL")
+            if db_url:
+                self.pool = await asyncpg.create_pool(dsn=db_url)
+            else:
+                self.pool = await asyncpg.create_pool(
+                    user=os.getenv("DB_USER", "postgres"),
+                    password=os.getenv("DB_PASSWORD", "admin123"),
+                    database=os.getenv("DB_NAME", "zaplabels"),
+                    host=os.getenv("DB_HOST", "localhost"),
+                    port=os.getenv("DB_PORT", 5432)
+                )
             await self.create_tables()
             print("✅ PostgreSQL connected successfully!")
         except Exception as e:
