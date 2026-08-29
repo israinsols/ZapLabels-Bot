@@ -21,7 +21,7 @@ class Database:
                     password=os.getenv("DB_PASSWORD", "admin123"),
                     database=os.getenv("DB_NAME", "zaplabels"),
                     host=os.getenv("DB_HOST", "localhost"),
-                    port=os.getenv("DB_PORT", 5432)
+                    port=int(os.getenv("DB_PORT", 5432))
                 )
             await self.create_tables()
             print("✅ PostgreSQL connected successfully!")

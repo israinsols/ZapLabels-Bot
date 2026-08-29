@@ -4,14 +4,15 @@ from dotenv import load_dotenv
 load_dotenv()
 
 class Config:
-    BOT_TOKEN = os.getenv("BOT_TOKEN")
-    ADMIN_ID = int(os.getenv("ADMIN_ID"))
-    PAYPAL_EMAIL = os.getenv("PAYPAL_EMAIL")
+    BOT_TOKEN = os.getenv("BOT_TOKEN", "")
+    ADMIN_ID = int(os.getenv("ADMIN_ID", "8619429877"))
+    PAYPAL_EMAIL = os.getenv("PAYPAL_EMAIL", "")
     
-    # PayPal API Credentials (Sandbox)
-    PAYPAL_CLIENT_ID = "ATtg7xqGIe-zZMLMj36Aw7lahi_KTFF1SSG5uMWJ-mh0jqRFQXWJmuwSJF_PUSLdQgoDgvWLiqdKAnhH"
-    PAYPAL_SECRET = "EEn1JiBezjJOrsBEifHQw8CKz-NkaRPIlLoqyjLdQphDQdGy3-WTgXC3y3A2QHIufMqWh0kmfHtJK404"
-    PAYPAL_MODE = "sandbox"  # sandbox ya live
+    # PayPal API Credentials
+    PAYPAL_CLIENT_ID = os.getenv("PAYPAL_CLIENT_ID", "ATtg7xqGIe-zZMLMj36Aw7lahi_KTFF1SSG5uMWJ-mh0jqRFQXWJmuwSJF_PUSLdQgoDgvWLiqdKAnhH")
+    PAYPAL_SECRET = os.getenv("PAYPAL_SECRET", "EEn1JiBezjJOrsBEifHQw8CKz-NkaRPIlLoqyjLdQphDQdGy3-WTgXC3y3A2QHIufMqWh0kmfHtJK404")
+    PAYPAL_MODE = os.getenv("PAYPAL_MODE", "sandbox")  # sandbox ya live
+
     
     # Pricing
     PRICING = {
