@@ -213,25 +213,26 @@ class DataMatrixProcessor:
 
             target_w, target_h = size
 
-            # Compute the largest INTEGER px-per-module that still fits inside target
-            # with at least a 4px quiet zone on each side
             content_h, content_w = content.shape[:2]
-            quiet = 4  # minimum quiet zone pixels
-            max_scale_w = (target_w - 2 * quiet) / content_w
-            max_scale_h = (target_h - 2 * quiet) / content_h
-            scale = max(1, int(min(max_scale_w, max_scale_h)))
+            qw = max(2, int(target_w * 0.04))
+            qh = max(2, int(target_h * 0.04))
+            avail_w = max(10, target_w - 2 * qw)
+            avail_h = max(10, target_h - 2 * qh)
 
-            # Scale content by integer factor — crisp, no fractional blur
-            scaled_w = content_w * scale
-            scaled_h = content_h * scale
-            scaled = cv2.resize(content, (scaled_w, scaled_h), interpolation=cv2.INTER_NEAREST)
+            scale = int(min(avail_w / content_w, avail_h / content_h))
+            if scale >= 1:
+                scaled_w = content_w * scale
+                scaled_h = content_h * scale
+                scaled = cv2.resize(content, (scaled_w, scaled_h), interpolation=cv2.INTER_NEAREST)
+            else:
+                scaled = cv2.resize(content, (avail_w, avail_h), interpolation=cv2.INTER_AREA)
+
             scaled = np.where(scaled > 127, 255, 0).astype(np.uint8)
 
-            # Pad to exact target size with white
-            pad_top = (target_h - scaled_h) // 2
-            pad_bottom = target_h - scaled_h - pad_top
-            pad_left = (target_w - scaled_w) // 2
-            pad_right = target_w - scaled_w - pad_left
+            pad_top = max(0, (target_h - scaled.shape[0]) // 2)
+            pad_bottom = max(0, target_h - scaled.shape[0] - pad_top)
+            pad_left = max(0, (target_w - scaled.shape[1]) // 2)
+            pad_right = max(0, target_w - scaled.shape[1] - pad_left)
 
             img_array = cv2.copyMakeBorder(
                 scaled,
@@ -239,7 +240,11 @@ class DataMatrixProcessor:
                 cv2.BORDER_CONSTANT, value=255
             )
 
-            print(f"✅ Data Matrix generated! Scale={scale}px/module, Content={scaled_w}x{scaled_h}, Final={img_array.shape}")
+            if img_array.shape[:2] != (target_h, target_w):
+                img_array = cv2.resize(img_array, (target_w, target_h), interpolation=cv2.INTER_NEAREST)
+                img_array = np.where(img_array > 127, 255, 0).astype(np.uint8)
+
+            print(f"✅ Data Matrix generated! Target={size}, Final={img_array.shape}")
             return img_array
 
         except Exception as e:
