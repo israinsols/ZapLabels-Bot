@@ -1,12 +1,18 @@
 import cv2
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 import pytesseract
 import re
 import os
 
+import shutil
+
 # Set Tesseract path
-pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+if shutil.which("tesseract"):
+    pytesseract.pytesseract.tesseract_cmd = "tesseract"
+elif os.path.exists(r"C:\Program Files\Tesseract-OCR\tesseract.exe"):
+    pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+
 
 class LabelEditor:
     
@@ -58,22 +64,17 @@ class LabelEditor:
         if img is None:
             return None
         
-        # Evri specific basic wipe (hardcoded box based on typical Evri label layout)
-        # The address is usually on the left side, roughly middle.
-        # Let's white out a large rectangle on the left side
         h, w = img.shape[:2]
         
-        # Approximate region for Evri address box (Destination)
-        # Cleanly inside the destination inner border:
+        # Approximate region for address box
         x1, y1 = int(w * 0.075), int(h * 0.490)
         x2, y2 = int(w * 0.505), int(h * 0.672)
         
-        # Draw white rectangle
+        # White out the region (remove old address)
         cv2.rectangle(img, (x1, y1), (x2, y2), (255, 255, 255), -1)
         
         # Convert to PIL for text overlay
         img_pil = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
-        from PIL import ImageDraw, ImageFont
         draw = ImageDraw.Draw(img_pil)
         
         try:
@@ -93,6 +94,36 @@ class LabelEditor:
         
         cv2.imwrite(output_path, img)
         print(f"✅ Label saved with new address")
+        return output_path
+    
+    @staticmethod
+    def remove_sender_info(image_path, output_path):
+        """
+        Remove sender address, order numbers, reference numbers, and small barcodes
+        """
+        img = cv2.imread(image_path)
+        if img is None:
+            return None
+        
+        h, w = img.shape[:2]
+        
+        # White out sender address area (top of label)
+        x1, y1 = int(w * 0.02), int(h * 0.02)
+        x2, y2 = int(w * 0.40), int(h * 0.15)
+        cv2.rectangle(img, (x1, y1), (x2, y2), (255, 255, 255), -1)
+        
+        # White out reference numbers area (bottom of label)
+        x1, y1 = int(w * 0.02), int(h * 0.85)
+        x2, y2 = int(w * 0.50), int(h * 0.98)
+        cv2.rectangle(img, (x1, y1), (x2, y2), (255, 255, 255), -1)
+        
+        # White out small barcodes (bottom right)
+        x1, y1 = int(w * 0.70), int(h * 0.85)
+        x2, y2 = int(w * 0.98), int(h * 0.98)
+        cv2.rectangle(img, (x1, y1), (x2, y2), (255, 255, 255), -1)
+        
+        cv2.imwrite(output_path, img)
+        print(f"✅ Sender info, references, and small barcodes removed")
         return output_path
     
     @staticmethod
@@ -121,9 +152,18 @@ class LabelEditor:
         }
         print(f"   New Address: {new_address}")
         
-        # Step 3: Replace address on label
-        print("\n📌 Step 3: Replacing address...")
-        result = LabelEditor.replace_address_on_label(original_path, new_address, output_path)
+        # Step 3: Remove sender info, references, small barcodes
+        print("\n📌 Step 3: Removing sender info, references, small barcodes...")
+        temp_path = output_path.replace('.jpg', '_temp.jpg')
+        LabelEditor.remove_sender_info(original_path, temp_path)
+        
+        # Step 4: Replace address on label
+        print("\n📌 Step 4: Replacing address...")
+        result = LabelEditor.replace_address_on_label(temp_path, new_address, output_path)
+        
+        # Clean up temp file
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
         
         print("\n" + "=" * 50)
         print("✅ FTID Label Created Successfully!")

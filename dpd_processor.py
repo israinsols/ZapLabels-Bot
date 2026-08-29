@@ -6,8 +6,14 @@ import pytesseract
 import re
 import os
 
+import shutil
+
 # Set Tesseract path
-pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+if shutil.which("tesseract"):
+    pytesseract.pytesseract.tesseract_cmd = "tesseract"
+elif os.path.exists(r"C:\Program Files\Tesseract-OCR\tesseract.exe"):
+    pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+
 
 
 class DPDProcessor:

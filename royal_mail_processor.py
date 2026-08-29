@@ -1,0 +1,441 @@
+import os
+import re
+import cv2
+import numpy as np
+from PIL import Image, ImageDraw, ImageFont
+import pytesseract
+
+import shutil
+
+if shutil.which("tesseract"):
+    pytesseract.pytesseract.tesseract_cmd = "tesseract"
+elif os.path.exists(r"C:\Program Files\Tesseract-OCR\tesseract.exe"):
+    pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+
+
+
+def _open_image(path):
+    ext = os.path.splitext(path)[1].lower()
+    if ext == ".pdf":
+        try:
+            import fitz
+            doc = fitz.open(path)
+            page = doc[0]
+            mat = fitz.Matrix(300 / 72, 300 / 72)
+            pix = page.get_pixmap(matrix=mat, colorspace=fitz.csRGB)
+            arr = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, 3)
+            img = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
+            doc.close()
+            return img
+        except Exception as e:
+            raise RuntimeError(f"PDF open failed: {e}")
+    else:
+        img = cv2.imread(path)
+        if img is None:
+            raise RuntimeError(f"Cannot read image: {path}")
+        return img
+
+
+def _save_image(img, path):
+    cv2.imwrite(path, img)
+
+
+def _to_pil(img):
+    return Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+
+
+def _from_pil(pil_img):
+    return cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
+
+
+def _ocr_full(img, psm=6):
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    return pytesseract.image_to_string(gray, config=f"--oem 3 --psm {psm}")
+
+
+def _ocr_data(img, psm=6):
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    return pytesseract.image_to_data(
+        gray,
+        config=f"--oem 3 --psm {psm}",
+        output_type=pytesseract.Output.DICT
+    )
+
+
+def _is_tracking(text):
+    """Check if a string looks like a Royal Mail tracking number."""
+    clean = re.sub(r'[^A-Z0-9]', '', text.upper())
+    if len(clean) >= 9 and len(clean) <= 21:
+        if re.match(r'^[A-Z]{2}[0-9]{8,14}[A-Z]{2}$', clean) or re.match(r'^[0-9]{9,21}$', clean):
+            return True
+    return False
+
+
+def _alter_one_digit(tracking):
+    """Alter the last digit of the tracking number by +1 (wraps 9 -> 0)."""
+    for i in range(len(tracking) - 1, -1, -1):
+        if tracking[i].isdigit():
+            new_digit = str((int(tracking[i]) + 1) % 10)
+            return tracking[:i] + new_digit + tracking[i + 1:]
+    return tracking
+
+
+def alter_tracking_text_on_image(img):
+    """
+    Locate the printed tracking number text (not the barcode bars),
+    alter one digit, and paint the new text back over the original.
+    """
+    h_img, w_img = img.shape[:2]
+    data = _ocr_data(img, psm=6)
+    n = len(data["text"])
+    
+    # 1. Get words ONLY from middle section of label (30% to 65% height)
+    # to avoid header text like 'Postage Paid GB' at top right
+    words = []
+    for i in range(n):
+        w = data["text"][i].strip()
+        if w:
+            y1 = data["top"][i]
+            y2 = y1 + data["height"][i]
+            # Restrict to middle height zone where tracking text lives
+            if y1 >= int(h_img * 0.30) and y2 <= int(h_img * 0.65):
+                words.append({
+                    "text": w,
+                    "clean": re.sub(r'[^A-Z0-9]', '', w.upper()),
+                    "x1": data["left"][i],
+                    "y1": y1,
+                    "x2": data["left"][i] + data["width"][i],
+                    "y2": y2
+                })
+            
+    full_clean = "".join([w["clean"] for w in words])
+    tracking_clean = None
+    
+    m = re.search(r'[A-Z]{2}[0-9]{8,14}[A-Z]{2}', full_clean)
+    if m: tracking_clean = m.group()
+    else:
+        m2 = re.search(r'[0-9]{11,21}', full_clean)
+        if m2: tracking_clean = m2.group()
+        
+    if not tracking_clean:
+        print("Could not find written tracking number in middle zone -- skipping alter step")
+        return img
+        
+    # 2. Find which words in the middle zone make up this tracking number
+    tracking_box = None
+    original_text_parts = []
+    
+    for w in words:
+        if len(w["clean"]) >= 2 and w["clean"] in tracking_clean:
+            # It's part of the tracking number!
+            original_text_parts.append(w["text"])
+            if tracking_box is None:
+                tracking_box = [w["x1"], w["y1"], w["x2"], w["y2"]]
+            else:
+                tracking_box[0] = min(tracking_box[0], w["x1"])
+                tracking_box[1] = min(tracking_box[1], w["y1"])
+                tracking_box[2] = max(tracking_box[2], w["x2"])
+                tracking_box[3] = max(tracking_box[3], w["y2"])
+                
+    if not tracking_box:
+        print("Found tracking string but couldn't locate words -- skipping alter step")
+        return img
+        
+    tracking_found = " ".join(original_text_parts)
+    print(f"Found tracking text: '{tracking_found}' at box {tracking_box}")
+
+    altered = _alter_one_digit(tracking_found)
+    print(f"Altered tracking: {tracking_found} -> {altered}")
+
+    if tracking_box:
+        x, y = tracking_box[0], tracking_box[1]
+        bw, bh = tracking_box[2] - tracking_box[0], tracking_box[3] - tracking_box[1]
+        
+        # Add slight margin to box
+        pad = 2
+        x1_w = max(0, x - pad)
+        y1_w = max(0, y - pad)
+        x2_w = min(w_img, x + bw + pad)
+        y2_w = min(h_img, y + bh + pad)
+
+        # Wipe old text with white rectangle
+        cv2.rectangle(img, (x1_w, y1_w), (x2_w, y2_w), (255, 255, 255), -1)
+        
+        # Render new text with PIL
+        pil = _to_pil(img)
+        draw = ImageDraw.Draw(pil)
+        font_size = max(12, int(bh * 0.85))
+        try:
+            font = ImageFont.truetype("C:/Windows/Fonts/arial.ttf", font_size)
+        except Exception:
+            font = ImageFont.load_default()
+        draw.text((x, y), altered, fill=(0, 0, 0), font=font)
+        img = _from_pil(pil)
+
+    return img
+
+
+def _find_delivery_address_box(img):
+    """
+    Use OCR postcode detection to locate the delivery address block.
+    Returns (x1, y1, x2, y2) pixel coords.
+    """
+    h, w = img.shape[:2]
+    data = _ocr_data(img, psm=6)
+    n = len(data["text"])
+    candidate_boxes = []
+
+    for i in range(n):
+        text = data["text"][i].strip()
+        # UK postcode pattern (includes typical returns like XX40 2HH)
+        if re.match(r"^[A-Z]{1,2}[0-9][A-Z0-9]?[0-9][A-Z]{2}$", text.replace(' ', '')) or \
+           re.match(r"^[A-Z]{1,2}[0-9][A-Z0-9]?\s[0-9][A-Z]{2}$", text):
+            conf_raw = data["conf"][i]
+            conf = int(conf_raw) if str(conf_raw).lstrip("-").isdigit() else 0
+            if conf > 30:
+                px = data["left"][i]
+                py = data["top"][i]
+                candidate_boxes.append((px, py, text))
+
+    if not candidate_boxes:
+        # Fallback: exact zone for delivery address (bottom half, below barcode)
+        x1 = int(w * 0.02)
+        y1 = int(h * 0.52)
+        x2 = int(w * 0.98)
+        y2 = int(h * 0.74)
+        print("No postcode found by OCR -- using precise proportional fallback zone")
+        return x1, y1, x2, y2
+
+    # Pick postcode closest to 60% down the label (delivery, not sender)
+    best = sorted(candidate_boxes, key=lambda b: abs(b[1] - h * 0.60))[0]
+    pc_x, pc_y, pc_text = best
+    
+    # Expand box to cover ~6 address lines above the postcode
+    line_h = 30
+    box_x1 = max(0, pc_x - 20)
+    box_y1 = max(0, pc_y - line_h * 6)
+    
+    # Safeguard: Do not overlap the main barcode (which usually ends around 50%)
+    if box_y1 < int(h * 0.50):
+        box_y1 = int(h * 0.50)
+        
+    box_x2 = min(w, pc_x + 450)
+    box_y2 = min(h, pc_y + line_h * 2)
+    print(f"Delivery address box: ({box_x1},{box_y1}) -> ({box_x2},{box_y2})  postcode={pc_text}")
+    return box_x1, box_y1, box_x2, box_y2
+
+
+def _build_address_lines(warehouse):
+    """Format warehouse dict into Royal Mail style address lines."""
+    addr = warehouse.get("address", "")
+    name = warehouse.get("name", "").strip()
+    postcode = warehouse.get("postcode", "").strip().upper()
+    parts = [p.strip() for p in addr.split(",") if p.strip()]
+    lines = [name] + parts + [postcode]
+    return [l for l in lines if l]
+
+
+def replace_delivery_address(img, warehouse):
+    """Wipe old delivery address and write new 3PL address in matching style."""
+    box = _find_delivery_address_box(img)
+    if box is None:
+        print("Could not locate delivery address box")
+        return img
+    x1, y1, x2, y2 = box
+    box_h = y2 - y1
+
+    # Wipe the old address
+    cv2.rectangle(img, (x1, y1), (x2, y2), (255, 255, 255), -1)
+
+    # Font size relative to box height
+    num_lines = 5
+    font_size = max(14, box_h // (num_lines + 2))
+    lines = _build_address_lines(warehouse)
+
+    pil = _to_pil(img)
+    draw = ImageDraw.Draw(pil)
+    try:
+        font = ImageFont.truetype("C:/Windows/Fonts/arial.ttf", font_size)
+    except Exception:
+        font = ImageFont.load_default()
+
+    pad = 8
+    ty = y1 + pad
+    for line in lines:
+        draw.text((x1 + pad, ty), line, fill=(0, 0, 0), font=font)
+        ty += font_size + 8
+
+    img = _from_pil(pil)
+    print(f"Delivery address replaced: {lines}")
+    return img
+
+
+def wipe_sender_address(img):
+    """
+    Find and remove the sender / return address.
+    Looks for 'From:' keywords. Does NOT fallback to wiping top-left corner
+    because that corner often contains the Service Indicator (e.g. Tracked 24).
+    """
+    h, w = img.shape[:2]
+    data = _ocr_data(img, psm=11)
+    n = len(data["text"])
+    found_y = None
+    found_x = None
+
+    sender_pattern = re.compile(r"^(from|sender)$", re.IGNORECASE)
+
+    for i in range(n):
+        text = data["text"][i].strip()
+        if sender_pattern.match(text):
+            conf_raw = data["conf"][i]
+            conf = int(conf_raw) if str(conf_raw).lstrip("-").isdigit() else 0
+            if conf > 40:
+                found_y = data["top"][i]
+                found_x = data["left"][i]
+                print(f"Sender keyword found: '{text}' at y={found_y}")
+                break
+
+    if found_y is not None:
+        y1 = max(0, found_y - 5)
+        y2 = min(h, found_y + 130)
+        x1 = max(0, found_x - 5)
+        x2 = min(w, found_x + 380)
+        cv2.rectangle(img, (x1, y1), (x2, y2), (255, 255, 255), -1)
+        print(f"Sender address wiped: ({x1},{y1})->({x2},{y2})")
+    else:
+        print("No sender keyword found -- NOT wiping anything (protecting Service Indicator).")
+
+    return img
+
+
+def wipe_bottom_references(img):
+    """
+    Erase extra order numbers, reference numbers, or small barcodes at the very bottom.
+    Preserves the standard 'Internal use' line unless extra bottom barcodes are present.
+    """
+    h, w = img.shape[:2]
+    # Only wipe the very bottom strip (below 88% of label height) to preserve the internal use divider line
+    y1 = int(h * 0.88)
+    
+    # Check if there's text/barcodes in the bottom strip before wiping
+    data = _ocr_data(img, psm=6)
+    n = len(data["text"])
+    has_bottom_data = False
+    for i in range(n):
+        if data["text"][i].strip():
+            if data["top"][i] >= y1:
+                has_bottom_data = True
+                break
+                
+    if has_bottom_data:
+        cv2.rectangle(img, (0, y1), (w, h), (255, 255, 255), -1)
+        print(f"Bottom reference numbers wiped from y={y1} to y={h}")
+    else:
+        print("No extra bottom reference text found -- preserving bottom section.")
+        
+    return img
+
+
+def update_datamatrix(img, input_path, warehouse):
+    """
+    Decode existing Royal Mail DataMatrix -> update postcode + building name
+    -> regenerate at same size -> composite back onto label.
+    Falls back gracefully if decode fails.
+    Reads from input_path (the ORIGINAL image) to guarantee it hasn't been wiped!
+    """
+    from datamatrix_processor import DataMatrixProcessor
+
+    try:
+        # DETECT FROM THE ORIGINAL IMAGE
+        print(f"Detecting DataMatrix on original: {input_path}")
+        decoded, bbox, _ = DataMatrixProcessor.detect_datamatrix(input_path)
+        payload = DataMatrixProcessor.decode_payload(decoded)
+        
+        new_postcode = warehouse.get("postcode", "")
+        new_building = warehouse.get("name", "")
+        new_payload = DataMatrixProcessor.update_payload(payload, new_postcode, new_building)
+        
+        # Generate new DataMatrix
+        new_dm = DataMatrixProcessor.generate_datamatrix(new_payload, (bbox[2], bbox[3]))
+
+        if new_dm is not None:
+            x, y, bw, bh = bbox
+            if len(img.shape) == 3:
+                resized = cv2.resize(new_dm, (bw, bh), interpolation=cv2.INTER_NEAREST)
+                new_dm_3ch = cv2.cvtColor(resized, cv2.COLOR_GRAY2BGR)
+                img[y:y + bh, x:x + bw] = new_dm_3ch
+            else:
+                img[y:y + bh, x:x + bw] = cv2.resize(new_dm, (bw, bh), interpolation=cv2.INTER_NEAREST)
+            print(f"DataMatrix updated at ({x},{y}) size {bw}x{bh}")
+        else:
+            print("DataMatrix generation failed -- keeping original")
+
+    except Exception as e:
+        print(f"DataMatrix update error: {e} -- keeping original")
+
+    return img
+
+
+# ============================================================
+# Main Processor Class
+# ============================================================
+
+class RoyalMailProcessor:
+    """
+    Royal Mail FTID — Direct Edit Pipeline.
+    """
+
+    @staticmethod
+    def process_royal_mail_label(input_path, warehouse, output_path):
+        print("=" * 55)
+        print("Royal Mail FTID -- Direct Edit Pipeline")
+        print("=" * 55)
+
+        try:
+            print("\nStep 1: Loading label...")
+            img = _open_image(input_path)
+            h, w = img.shape[:2]
+            print(f"   Dimensions: {w}x{h}px")
+
+            print("\nStep 2: Altering written tracking number...")
+            img = alter_tracking_text_on_image(img)
+
+            print("\nStep 3: Replacing delivery address with 3PL...")
+            img = replace_delivery_address(img, warehouse)
+
+            print("\nStep 4: Wiping sender address...")
+            img = wipe_sender_address(img)
+
+            print("\nStep 5: Wiping bottom references + barcodes...")
+            img = wipe_bottom_references(img)
+
+            print("\nStep 6: Updating DataMatrix barcode...")
+            # We pass `input_path` so it can scan the original image!
+            img = update_datamatrix(img, input_path, warehouse)
+
+            out_dir = os.path.dirname(output_path)
+            if out_dir:
+                os.makedirs(out_dir, exist_ok=True)
+            _save_image(img, output_path)
+            print(f"\nDone! Output saved: {output_path}")
+            print("=" * 55)
+
+            return {"output_path": output_path, "warehouse": warehouse}
+
+        except Exception as e:
+            print(f"RoyalMailProcessor error: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+
+    @staticmethod
+    def extract_postcode_ocr(image_path):
+        try:
+            img = _open_image(image_path)
+            text = _ocr_full(img, psm=6)
+            matches = re.findall(r"[A-Z]{1,2}[0-9][A-Z0-9]?\s?[0-9][A-Z]{2}", text)
+            if matches:
+                return matches[0]
+        except Exception as e:
+            print(f"Postcode OCR error: {e}")
+        return None

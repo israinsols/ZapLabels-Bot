@@ -19,6 +19,7 @@ class DataMatrixProcessor:
         
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         
+        scale = 1
         # ===== ENHANCE IMAGE FOR BETTER DETECTION =====
         # Method 1: Try original
         decoded = decode(Image.fromarray(gray))
@@ -33,22 +34,28 @@ class DataMatrixProcessor:
         
         # Method 3: Try threshold
         if not decoded:
+            scale = 1
             _, thresh = cv2.threshold(gray, 150, 255, cv2.THRESH_BINARY)
             decoded = decode(Image.fromarray(thresh))
         
         # Method 4: Try adaptive threshold
         if not decoded:
+            scale = 1
             thresh = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
             decoded = decode(Image.fromarray(thresh))
         
         if not decoded:
             raise ValueError("❌ No Data Matrix found in image")
         
-        # Get position
+        # Get position (pylibdmtx top is measured from bottom of image, and adjust for scale)
         rect = decoded[0].rect
-        x, y, w, h = rect.left, rect.top, rect.width, rect.height
+        x = int(rect.left / scale)
+        top_from_bottom = int(rect.top / scale)
+        w = int(rect.width / scale)
+        h = int(rect.height / scale)
+        y = img.shape[0] - top_from_bottom - h
         
-        print(f"✅ Data Matrix detected at position: ({x}, {y}) size: {w}x{h}")
+        print(f"✅ Data Matrix detected at position: ({x}, {y}) size: {w}x{h} (scale={scale})")
         
         return decoded[0], (x, y, w, h), img
     
@@ -138,76 +145,120 @@ class DataMatrixProcessor:
     @staticmethod
     def generate_datamatrix(payload, size=(100, 100)):
         """
-        Generate new Data Matrix with updated payload
+        Generate new Data Matrix with updated payload.
+        Uses integer-multiple scaling to avoid dotted/broken border artifacts.
         """
         try:
             # Encode payload
             encoded = encode(payload.encode('utf-8'))
-            
-            # Convert to numpy array
+
+            # Build grayscale array from encoded result
             if isinstance(encoded, Image.Image):
-                img_array = np.array(encoded, dtype=np.uint8)
+                img_gray = encoded.convert('L')
+            elif hasattr(encoded, 'pixels') and hasattr(encoded, 'width'):
+                img_rgb = Image.frombytes('RGB', (encoded.width, encoded.height), encoded.pixels)
+                img_gray = img_rgb.convert('L')
             else:
-                # pylibdmtx encode returns an object with pixels, width, height
-                try:
-                    if hasattr(encoded, 'pixels') and hasattr(encoded, 'width'):
-                        img = Image.frombytes('RGB', (encoded.width, encoded.height), encoded.pixels)
-                        # Convert to grayscale then binary
-                        img = img.convert('L')
-                        img_array = np.array(img, dtype=np.uint8)
-                    else:
-                        img_array = np.array(encoded, dtype=np.uint8)
-                        if img_array.max() > 255:
-                            img_array = np.clip(img_array, 0, 255).astype(np.uint8)
-                except Exception as inner_e:
-                    print(f"Fallback generation error: {inner_e}")
-                    img_array = np.array(encoded.pixels) if hasattr(encoded, 'pixels') else np.array(encoded)
-            
-            # Ensure binary (0 and 255)
-            img_array = np.where(img_array > 127, 255, 0).astype(np.uint8)
-            
-            # Resize using OpenCV
-            if size:
-                img_array = cv2.resize(img_array, size, interpolation=cv2.INTER_NEAREST)
-                # After resize, ensure binary again
-                img_array = np.where(img_array > 127, 255, 0).astype(np.uint8)
-            
-            print(f"✅ Data Matrix generated! Shape: {img_array.shape}")
+                img_gray = Image.fromarray(np.array(encoded, dtype=np.uint8)).convert('L')
+
+            full_arr = np.array(img_gray, dtype=np.uint8)
+
+            # Binarise
+            binary = np.where(full_arr > 127, 255, 0).astype(np.uint8)
+
+            # Crop quiet zone — find bounding box of black pixels
+            black_pixels = cv2.findNonZero(255 - binary)
+            if black_pixels is not None:
+                x, y, cw, ch = cv2.boundingRect(black_pixels)
+                content = binary[y:y + ch, x:x + cw]
+            else:
+                content = binary
+
+            target_w, target_h = size
+
+            # Compute the largest INTEGER px-per-module that still fits inside target
+            # with at least a 4px quiet zone on each side
+            content_h, content_w = content.shape[:2]
+            quiet = 4  # minimum quiet zone pixels
+            max_scale_w = (target_w - 2 * quiet) / content_w
+            max_scale_h = (target_h - 2 * quiet) / content_h
+            scale = max(1, int(min(max_scale_w, max_scale_h)))
+
+            # Scale content by integer factor — crisp, no fractional blur
+            scaled_w = content_w * scale
+            scaled_h = content_h * scale
+            scaled = cv2.resize(content, (scaled_w, scaled_h), interpolation=cv2.INTER_NEAREST)
+            scaled = np.where(scaled > 127, 255, 0).astype(np.uint8)
+
+            # Pad to exact target size with white
+            pad_top = (target_h - scaled_h) // 2
+            pad_bottom = target_h - scaled_h - pad_top
+            pad_left = (target_w - scaled_w) // 2
+            pad_right = target_w - scaled_w - pad_left
+
+            img_array = cv2.copyMakeBorder(
+                scaled,
+                pad_top, pad_bottom, pad_left, pad_right,
+                cv2.BORDER_CONSTANT, value=255
+            )
+
+            print(f"✅ Data Matrix generated! Scale={scale}px/module, Content={scaled_w}x{scaled_h}, Final={img_array.shape}")
             return img_array
+
         except Exception as e:
             print(f"❌ Error generating Data Matrix: {e}")
             return None
+
     
     @staticmethod
     def update_payload(old_payload, new_postcode, new_building_name):
         """
-        Update payload with new address data
+        Cleanly replace building name + postcode — no duplicates.
+        Everything between the tracking number and the old postcode is wiped
+        and replaced with: new_building + new_postcode.
         """
-        new_payload = old_payload
+        if not old_payload:
+            return old_payload
         
-        # Replace postcode
-        postcode_pattern = r'[A-Z]{1,2}[0-9][A-Z0-9]? ?[0-9][A-Z]{2}'
-        postcode_match = re.search(postcode_pattern, old_payload)
+        new_bldg = new_building_name.strip().upper()
+        new_pc = new_postcode.strip().upper()
         
-        if postcode_match:
-            old_postcode = postcode_match.group()
-            # Replace all occurrences
-            new_payload = new_payload.replace(old_postcode, new_postcode)
-            print(f"✅ Postcode replaced: {old_postcode} → {new_postcode}")
+        # Find tracking number
+        trk_match = re.search(r'[A-Z]{2}[0-9]{9}[A-Z]{2}', old_payload)
+        if not trk_match:
+            trk_match = re.search(r'[A-Z]{2}[0-9]{8,14}[A-Z]{2}', old_payload)
         
-        # Replace building name (try to find and replace)
-        # Look for the building name before postcode
-        if postcode_match:
-            before_postcode = old_payload[:postcode_match.start()].strip()
-            # Find a word that looks like a building name (capitalized, length > 2)
-            words = before_postcode.split()
-            for word in reversed(words):
-                if len(word) > 2 and word[0].isupper():
-                    old_building = word
-                    new_payload = new_payload.replace(old_building, new_building_name)
-                    print(f"✅ Building name replaced: {old_building} → {new_building_name}")
-                    break
+        if not trk_match:
+            return old_payload
         
+        pc_pattern = r'[A-Z]{1,2}[0-9][A-Z0-9]?\s?[0-9][A-Z]{2}'
+        
+        # Prefer finding postcode AFTER the tracking number
+        after_tracking = old_payload[trk_match.end():]
+        pc_match = re.search(pc_pattern, after_tracking)
+        
+        if pc_match:
+            # Postcode found after tracking — get absolute end index in full payload
+            old_pc_abs_end = trk_match.end() + pc_match.end()
+            prefix = old_payload[:trk_match.end()]
+            suffix = old_payload[old_pc_abs_end:]
+        else:
+            # Fallback: search the full payload for any postcode
+            pc_match_full = re.search(pc_pattern, old_payload)
+            if pc_match_full:
+                prefix = old_payload[:trk_match.end()]
+                suffix = old_payload[pc_match_full.end():]
+            else:
+                # No postcode found anywhere — keep prefix, drop rest
+                prefix = old_payload[:trk_match.end()]
+                suffix = ''
+
+        # Build clean payload — wipes ALL old text between tracking end and old postcode
+        new_payload = f"{prefix} {new_bldg} {new_pc}{suffix}"
+
+        print(f"✅ DataMatrix cleanly updated:")
+        print(f"   Old: {old_payload}")
+        print(f"   New: {new_payload}")
         return new_payload
     
     @staticmethod

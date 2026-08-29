@@ -156,7 +156,7 @@ async def service_selected(callback: types.CallbackQuery, state: FSMContext):
     
     await callback.message.edit_text(text, parse_mode="Markdown")
 
-# ============ TEXT/LIT HANDLER ============
+# ============ TEXT / QR HANDLER ============
 @dp.message(lambda message: message.text and not message.text.startswith('/'))
 async def handle_text(message: types.Message, state: FSMContext):
     order_data = await state.get_data()
@@ -166,16 +166,44 @@ async def handle_text(message: types.Message, state: FSMContext):
         await message.answer("⚠️ Please select a service first. Use /start")
         return
         
-    if order.get('service') == 'LIT':
-        print("🔄 LIT Mode: Processing...")
-        tracking_number = message.text.strip()
-        carrier = order.get('carrier')
+    text_input = message.text.strip()
+    carrier = order.get('carrier')
+    service = order.get('service')
+    
+    # 1. Parse QR String if detected
+    tracking_number = text_input
+    postcode = None
+    
+    import re
+    if '1DBarcode=' in text_input and '|' in text_input:
+        print("🔄 Detected QR Code Data String")
+        qr_data = {}
+        for part in text_input.split('|'):
+            if '=' in part:
+                k, v = part.split('=', 1)
+                qr_data[k.strip()] = v.strip()
+                
+        tracking_number = qr_data.get('1DBarcode', tracking_number)
+        ret_details = qr_data.get('RetDetails', '')
         
-        from lit_processor import LITProcessor
+        # Extract postcode from RetDetails
+        matches = re.findall(r'[A-Z]{1,2}[0-9][A-Z0-9]?\s?[0-9][A-Z]{2}', ret_details.upper())
+        if matches:
+            postcode = matches[-1]
+            print(f"📍 Extracted Postcode from QR: {postcode}")
+
+    if service == 'LIT':
+        print(f"🔄 LIT Mode: Processing Tracking {tracking_number}...")
+        
         os.makedirs("downloads", exist_ok=True)
-        output_path = f"downloads/lit_{carrier}_{tracking_number}.png"
-        
-        result = LITProcessor.process_lit(tracking_number, carrier, output_path)
+        if carrier == 'Royal Mail':
+            from template_processor import RoyalMailTemplateProcessor
+            output_path = f"downloads/lit_{carrier}_{tracking_number}.jpg"
+            result = RoyalMailTemplateProcessor.generate_label(tracking_number, None, output_path, 'LIT')
+        else:
+            from lit_processor import LITProcessor
+            output_path = f"downloads/lit_{carrier}_{tracking_number}.png"
+            result = LITProcessor.process_lit(tracking_number, carrier, output_path)
         
         if result:
             decode_msg = f"""
@@ -186,23 +214,66 @@ async def handle_text(message: types.Message, state: FSMContext):
 • Tracking: `{tracking_number}`
 
 ✅ *Address & Barcode Ready!*
-📁 Label: `{output_path}`
+"""
+            await message.answer(decode_msg, parse_mode="Markdown")
+            await message.answer_document(FSInputFile(output_path), caption="📦 Your LIT label")
+        else:
+            await message.answer("⚠️ *LIT processing failed. Template might be missing.*", parse_mode="Markdown")
+            return
+            
+    elif service == 'FTID':
+        if not postcode:
+            await message.answer("⚠️ *QR String missing delivery address/postcode. Cannot calculate 3PL.*", parse_mode="Markdown")
+            return
+            
+        print(f"🔄 FTID Mode (via QR): Finding 3PL for {postcode}...")
+        warehouse = await AddressProcessor.find_nearest_warehouse(postcode, carrier)
+        
+        if warehouse:
+            decode_msg = f"""
+✅ *QR FTID Label Generated!*
+
+📋 *Extracted:*
+• Tracking: `{tracking_number}`
+• Delivery Postcode: `{postcode}`
+
+🏭 *Redirected to 3PL Warehouse:*
+• Name: `{warehouse['name']}`
+• Address: `{warehouse['address']}`
+• New Postcode: `{warehouse['postcode']}`
 """
             await message.answer(decode_msg, parse_mode="Markdown")
             
-            # Save order to database
-            try:
-                db_result = await db.save_order(order)
-            except Exception as e:
-                print(f"❌ Error saving order: {e}")
-            
-            # ===== CREATE PAYPAL PAYMENT =====
-            amount = float(order['price'])
-            payment, approval_url = create_payment(amount, "GBP", f"{order['service']} for {order['carrier']}")
-            
-            if payment and approval_url:
-                await state.update_data(payment_id=payment.id)
-                payment_text = f"""
+            # Generate the FTID label from template for Royal Mail
+            if carrier == 'Royal Mail':
+                from template_processor import RoyalMailTemplateProcessor
+                os.makedirs("downloads", exist_ok=True)
+                output_path = f"downloads/ftid_qr_{tracking_number}.jpg"
+                result = RoyalMailTemplateProcessor.generate_label(tracking_number, warehouse, output_path, 'FTID')
+                if result:
+                    await message.answer_document(FSInputFile(output_path), caption="📦 Your FTID label")
+                else:
+                    await message.answer("⚠️ *Failed to generate FTID template.*", parse_mode="Markdown")
+        else:
+            await message.answer("⚠️ *No 3PL warehouse found in database.*", parse_mode="Markdown")
+            return
+    else:
+        await message.answer("⚠️ Please send a label file (PDF or Image), not text.")
+        return
+
+    # Save order to database
+    try:
+        db_result = await db.save_order(order)
+    except Exception as e:
+        print(f"❌ Error saving order: {e}")
+    
+    # ===== CREATE PAYPAL PAYMENT =====
+    amount = float(order['price'])
+    payment, approval_url = create_payment(amount, "GBP", f"{order['service']} for {order['carrier']}")
+    
+    if payment and approval_url:
+        await state.update_data(payment_id=payment.id)
+        payment_text = f"""
 💳 *Payment Required*
 
 📦 *Order Details:*
@@ -215,17 +286,13 @@ async def handle_text(message: types.Message, state: FSMContext):
 
 ⏳ After payment, click "I've Paid" to confirm.
 """
-                keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
-                    [types.InlineKeyboardButton(text="💳 Pay with PayPal", url=approval_url)],
-                    [types.InlineKeyboardButton(text="✅ I've Paid", callback_data=f"paid_{order['carrier']}_{order['service']}")]
-                ])
-                await message.answer(payment_text, reply_markup=keyboard, parse_mode="Markdown")
-            else:
-                await message.answer("❌ Payment creation failed. Please try again.")
-        else:
-            await message.answer("⚠️ *LIT processing failed. Template might be missing.*", parse_mode="Markdown")
+        keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
+            [types.InlineKeyboardButton(text="💳 Pay with PayPal", url=approval_url)],
+            [types.InlineKeyboardButton(text="✅ I've Paid", callback_data=f"paid_{order['carrier']}_{order['service']}")]
+        ])
+        await message.answer(payment_text, reply_markup=keyboard, parse_mode="Markdown")
     else:
-        await message.answer("⚠️ Please send a label file (PDF or Image), not text.")
+        await message.answer("❌ Payment creation failed. Please try again.")
 
 # ============ FILE UPLOAD HANDLER ============
 @dp.message(lambda message: message.document or message.photo)
@@ -255,7 +322,6 @@ async def handle_file(message: types.Message, state: FSMContext):
     output_path = f"downloads/ftid_{os.path.basename(file_path)}"
 
     # ===== AUTO-DETECT LABEL TYPE =====
-    # Run in executor with timeout so it never hangs the bot
     def _detect_label_type(fp):
         import cv2 as _cv2
         from pyzbar.pyzbar import decode as _pyzbar
@@ -263,14 +329,23 @@ async def handle_file(message: types.Message, state: FSMContext):
         if _img is None:
             return None
         _gray = _cv2.cvtColor(_img, _cv2.COLOR_BGR2GRAY)
-        # Resize to max 800px to speed up scanning
         _h, _w = _gray.shape
         if max(_h, _w) > 800:
             _scale = 800 / max(_h, _w)
             _gray = _cv2.resize(_gray, (int(_w * _scale), int(_h * _scale)))
         _pil = Image.fromarray(_gray)
         _pyzbar_result = _pyzbar(_pil)
-        _dmtx_result   = dmtx_decode(_pil, timeout=3000)  # 3s timeout
+        
+        if _pyzbar_result:
+            for b in _pyzbar_result:
+                if b.type == 'QRCODE':
+                    try:
+                        data = b.data.decode('utf-8')
+                        if '1DBarcode=' in data or 'Label=' in data:
+                            return ('QR_CODE', data)
+                    except: pass
+
+        _dmtx_result = dmtx_decode(_pil, timeout=3000)
         if _dmtx_result and not _pyzbar_result:
             return 'Royal Mail'
         elif _pyzbar_result:
@@ -293,9 +368,15 @@ async def handle_file(message: types.Message, state: FSMContext):
         loop = asyncio.get_event_loop()
         detected = await asyncio.wait_for(
             loop.run_in_executor(None, _detect_label_type, file_path),
-            timeout=10  # max 10s
+            timeout=10
         )
-        if detected:
+        if isinstance(detected, tuple) and detected[0] == 'QR_CODE':
+            print("🔄 Auto-detect: Vinted QR Code Image detected! Routing to QR text handler...")
+            message.text = detected[1]
+            await handle_text(message, state)
+            return
+            
+        elif detected:
             print(f"🔄 Auto-detect: {detected} label → using {detected} pipeline")
             carrier = detected
         else:
@@ -305,16 +386,13 @@ async def handle_file(message: types.Message, state: FSMContext):
     except Exception as _e:
         print(f"⚠️ Auto-detect failed: {_e} → using selected carrier: {carrier}")
 
-
     # ===== CARRIER-BASED ROUTING =====
     if carrier == 'UPS':
-        # ===== UPS PIPELINE =====
         try:
             print("\n" + "=" * 50)
             print("🚚 UPS Automation Start!")
             print("=" * 50)
             
-            # Postcode will be extracted in process_ups_label, for warehouse we can try a basic extraction first
             try:
                 from ups_processor import UPSProcessor
                 raw_postcode = UPSProcessor.extract_postcode_ocr(file_path)
@@ -332,8 +410,8 @@ async def handle_file(message: types.Message, state: FSMContext):
 ✅ *UPS Label Processed!*
 
 📋 *Details:*
-• Barcode Type: `{result['barcode_type']}`
-• Tracking: `{result['tracking'] or 'N/A'}`
+• Barcode Type: `{result.get('barcode_type', 'N/A')}`
+• Tracking: `{result.get('tracking', 'N/A')}`
 
 🏭 *Redirected to 3PL Warehouse:*
 • Name: `{warehouse['name']}`
@@ -341,7 +419,7 @@ async def handle_file(message: types.Message, state: FSMContext):
 • New Postcode: `{warehouse['postcode']}`
 
 ✅ *Address & Barcode Updated!*
-📁 Label: `{result['output_path']}`
+📁 Label: `{result.get('output_path', output_path)}`
 """
                 else:
                     decode_msg = "⚠️ *UPS processing failed. Please check the label.*"
@@ -360,13 +438,11 @@ async def handle_file(message: types.Message, state: FSMContext):
             await message.answer(f"⚠️ UPS processing error: {e}")
 
     elif carrier == 'DPD':
-        # ===== DPD PIPELINE =====
         try:
             print("\n" + "=" * 50)
             print("🚚 DPD Automation Start!")
             print("=" * 50)
 
-            # Get postcode from barcode first, fall back to OCR
             try:
                 barcodes, _ = DPDProcessor.detect_barcode(file_path)
                 raw_postcode = DPDProcessor.extract_postcode_ocr(file_path)
@@ -385,9 +461,9 @@ async def handle_file(message: types.Message, state: FSMContext):
 ✅ *DPD Label Processed!*
 
 📋 *Details:*
-• Barcode Type: `{result['barcode_type']}`
-• Tracking: `{result['tracking'] or 'N/A'}`
-• Old Postcode: `{result['delivery_postcode'] or 'N/A'}`
+• Barcode Type: `{result.get('barcode_type', 'N/A')}`
+• Tracking: `{result.get('tracking', 'N/A')}`
+• Old Postcode: `{result.get('delivery_postcode', 'N/A')}`
 
 🏭 *Redirected to 3PL Warehouse:*
 • Name: `{warehouse['name']}`
@@ -395,7 +471,7 @@ async def handle_file(message: types.Message, state: FSMContext):
 • New Postcode: `{warehouse['postcode']}`
 
 ✅ *Address & Barcode Updated!*
-📁 Label: `{result['output_path']}`
+📁 Label: `{result.get('output_path', output_path)}`
 """
                 else:
                     decode_msg = "⚠️ *DPD processing failed. Please check the label.*"
@@ -414,13 +490,11 @@ async def handle_file(message: types.Message, state: FSMContext):
             await message.answer(f"⚠️ DPD processing error: {e}")
 
     elif carrier == 'Evri':
-        # ===== EVRI PIPELINE =====
         try:
             print("\n" + "=" * 50)
             print("🚚 Evri Automation Start!")
             print("=" * 50)
 
-            # Extract postcode
             try:
                 from evri_processor import EvriProcessor
                 raw_postcode = EvriProcessor.extract_postcode_ocr(file_path)
@@ -438,9 +512,9 @@ async def handle_file(message: types.Message, state: FSMContext):
 ✅ *Evri Label Processed!*
 
 📋 *Details:*
-• Barcode Type: `{result['barcode_type']}`
-• Tracking: `{result['tracking'] or 'N/A'}`
-• Old Postcode: `{result['delivery_postcode'] or 'N/A'}`
+• Barcode Type: `{result.get('barcode_type', 'N/A')}`
+• Tracking: `{result.get('tracking', 'N/A')}`
+• Old Postcode: `{result.get('delivery_postcode', 'N/A')}`
 
 🏭 *Redirected to 3PL Warehouse:*
 • Name: `{warehouse['name']}`
@@ -448,7 +522,7 @@ async def handle_file(message: types.Message, state: FSMContext):
 • New Postcode: `{warehouse['postcode']}`
 
 ✅ *Address & Barcode Updated!*
-📁 Label: `{result['output_path']}`
+📁 Label: `{result.get('output_path', output_path)}`
 """
                 else:
                     decode_msg = "⚠️ *Evri processing failed. Please check the label.*"
@@ -467,13 +541,11 @@ async def handle_file(message: types.Message, state: FSMContext):
             await message.answer(f"⚠️ Evri processing error: {e}")
 
     elif carrier == 'DHL':
-        # ===== DHL PIPELINE =====
         try:
             print("\n" + "=" * 50)
             print("🚚 DHL Automation Start!")
             print("=" * 50)
 
-            # Extract postcode
             try:
                 from dhl_processor import DHLProcessor
                 raw_postcode = DHLProcessor.extract_postcode_ocr(file_path)
@@ -491,9 +563,9 @@ async def handle_file(message: types.Message, state: FSMContext):
 ✅ *DHL Label Processed!*
 
 📋 *Details:*
-• Barcode Type: `{result['barcode_type']}`
-• Tracking: `{result['tracking'] or 'N/A'}`
-• Old Postcode: `{result['delivery_postcode'] or 'N/A'}`
+• Barcode Type: `{result.get('barcode_type', 'N/A')}`
+• Tracking: `{result.get('tracking', 'N/A')}`
+• Old Postcode: `{result.get('delivery_postcode', 'N/A')}`
 
 🏭 *Redirected to 3PL Warehouse:*
 • Name: `{warehouse['name']}`
@@ -501,7 +573,7 @@ async def handle_file(message: types.Message, state: FSMContext):
 • New Postcode: `{warehouse['postcode']}`
 
 ✅ *Address & Barcode Updated!*
-📁 Label: `{result['output_path']}`
+📁 Label: `{result.get('output_path', output_path)}`
 """
                 else:
                     decode_msg = "⚠️ *DHL processing failed. Please check the label.*"
@@ -520,82 +592,62 @@ async def handle_file(message: types.Message, state: FSMContext):
             await message.answer(f"⚠️ DHL processing error: {e}")
 
     else:
-        # ===== ROYAL MAIL / DEFAULT PIPELINE (Data Matrix) =====
+        # ===== ROYAL MAIL FTID PIPELINE (Direct Edit) =====
         try:
-            result = DataMatrixProcessor.process_label(file_path)
-            if result:
-                fields = result['fields']
+            from royal_mail_processor import RoyalMailProcessor
 
-                # Find nearest warehouse
-                postcode = fields.get('postcode', 'ML3 8BL')
-                warehouse = await AddressProcessor.find_nearest_warehouse(postcode, carrier)
+            print("\n" + "=" * 50)
+            print("📬 Royal Mail FTID Start!")
+            print("=" * 50)
 
-                if warehouse:
-                    # Create FTID label with address replacement
-                    LabelEditor.create_ftid_label(file_path, warehouse, carrier, output_path)
+            # Extract postcode for warehouse lookup
+            try:
+                raw_postcode = RoyalMailProcessor.extract_postcode_ocr(file_path)
+            except Exception:
+                raw_postcode = None
 
-                    # Regenerate Data Matrix with new address
-                    final_output = DataMatrixProcessor.regenerate_datamatrix_on_label(
-                        file_path,
-                        warehouse['postcode'],
-                        warehouse['name'],
-                        output_path
-                    )
+            postcode = raw_postcode or 'ML3 8BL'
+            warehouse = await AddressProcessor.find_nearest_warehouse(postcode, 'Royal Mail')
 
-                    if final_output:
-                        decode_msg = f"""
-✅ *FTID Label Created Successfully!*
+            if warehouse:
+                result = RoyalMailProcessor.process_royal_mail_label(
+                    file_path, warehouse, output_path
+                )
 
-📋 *Extracted Fields:*
-• Service Type: `{fields.get('service_type', 'N/A')}`
-• Tracking: `{fields.get('tracking', 'N/A')}`
-• Old Postcode: `{fields.get('postcode', 'N/A')}`
-• Old Building: `{fields.get('building_name', 'N/A')}`
+                if result:
+                    decode_msg = f"""
+✅ *Royal Mail FTID Label Created!*
 
-🏭 *Nearest 3PL Warehouse:*
+🏭 *Redirected to 3PL Warehouse:*
 • Name: `{warehouse['name']}`
 • Address: `{warehouse['address']}`
 • New Postcode: `{warehouse['postcode']}`
 
-✅ *Data Matrix Regenerated!*
-📁 Final FTID Label: `{final_output}`
-"""
-                    else:
-                        decode_msg = f"""
-✅ *Data Matrix Decoded!*
-
-📋 *Extracted Fields:*
-• Service Type: `{fields.get('service_type', 'N/A')}`
-• Tracking: `{fields.get('tracking', 'N/A')}`
-• Postcode: `{fields.get('postcode', 'N/A')}`
-• Building Name: `{fields.get('building_name', 'N/A')}`
-
-🏭 *Nearest 3PL Warehouse:*
-• Name: `{warehouse['name']}`
-• Address: `{warehouse['address']}`
-• Postcode: `{warehouse['postcode']}`
-
-⚠️ *Data Matrix regeneration failed.*
-📁 File saved in downloads folder.
+✅ *All changes applied:*
+• Tracking text: 1 digit altered ✓
+• Delivery address: replaced ✓
+• Sender address: removed ✓
+• Bottom references: removed ✓
+• DataMatrix: updated ✓
 """
                 else:
-                    decode_msg = f"""
-✅ *Data Matrix Decoded!*
+                    decode_msg = "⚠️ *Royal Mail FTID processing failed. Please check the label.*"
+            else:
+                decode_msg = "⚠️ *No Royal Mail warehouse found in database.*"
 
-📋 *Extracted Fields:*
-• Service Type: `{fields.get('service_type', 'N/A')}`
-• Tracking: `{fields.get('tracking', 'N/A')}`
-• Postcode: `{fields.get('postcode', 'N/A')}`
-• Building Name: `{fields.get('building_name', 'N/A')}`
+            await message.answer(decode_msg, parse_mode="Markdown")
 
-⚠️ *No warehouse found in database.*
+            if result and result.get('output_path') and os.path.exists(result['output_path']):
+                await message.answer_document(
+                    FSInputFile(result['output_path']),
+                    caption="📬 Your processed Royal Mail FTID label"
+                )
 
-📁 File saved in downloads folder.
-"""
-
-                await message.answer(decode_msg, parse_mode="Markdown")
         except Exception as e:
-            await message.answer(f"⚠️ Data Matrix decode failed: {e}")
+            import traceback
+            traceback.print_exc()
+            await message.answer(f"⚠️ Royal Mail FTID error: {e}")
+
     
     # Save order to database
     try:
@@ -681,10 +733,9 @@ async def payment_confirmed(callback: types.CallbackQuery, state: FSMContext):
         )
     except Exception as e:
         if "message is not modified" in str(e):
-            pass  # Already showing correct content, safe to ignore
+            pass
         else:
             raise
-
 
 # ============ ADMIN PANEL ============
 @dp.message(Command("admin"))
@@ -693,7 +744,6 @@ async def admin_panel(message: types.Message):
         await message.answer("⚠️ Unauthorized access.")
         return
     
-    # Get all orders from database
     try:
         orders = await db.get_orders(10)
         
@@ -728,14 +778,14 @@ async def main():
             attempt += 1
             print(f"🔄 Starting polling (attempt #{attempt})...")
             await dp.start_polling(bot)
-            break  # Clean exit, stop retrying
+            break
         except Exception as e:
             err = str(e)
             if any(x in err for x in ["ClientConnectorError", "TelegramNetworkError", "WinError", "semaphore", "timeout", "ServerDisconnectedError"]):
                 print(f"⚠️ Network error: {e}")
                 print(f"🔁 Retrying in {retry_delay}s...")
                 await asyncio.sleep(retry_delay)
-                retry_delay = min(retry_delay * 2, max_delay)  # Exponential backoff, max 60s
+                retry_delay = min(retry_delay * 2, max_delay)
             else:
                 print(f"❌ Fatal error: {e}")
                 raise

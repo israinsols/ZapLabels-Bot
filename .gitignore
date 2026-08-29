@@ -3,6 +3,21 @@ __pycache__/
 *.pyc
 downloads/
 output/
-*.jpg
-*.jpeg
-*.png
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+ENV/
+*.log
+
+# Ignore root test images
+test_*.jpg
+test_*.png
+blank_test.jpg
+
+# Keep templates folder tracked
+!templates/
+!templates/**
+
+
