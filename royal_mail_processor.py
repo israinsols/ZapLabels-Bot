@@ -48,6 +48,23 @@ def _from_pil(pil_img):
     return cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
 
 
+def _get_font(size):
+    """Cross-platform font loader: tries Arial on Windows and Liberation/DejaVu on Linux."""
+    candidates = [
+        "C:/Windows/Fonts/arial.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
+    ]
+    for path in candidates:
+        if os.path.exists(path):
+            try:
+                return ImageFont.truetype(path, size)
+            except Exception:
+                continue
+    return ImageFont.load_default()
+
+
 def _ocr_full(img, psm=6):
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     return pytesseract.image_to_string(gray, config=f"--oem 3 --psm {psm}")
@@ -177,17 +194,39 @@ def alter_tracking_text_on_image(img):
 
 def _find_delivery_address_box(img):
     """
-    Use OCR postcode detection to locate the delivery address block.
+    Use horizontal divider line detection to find the delivery address zone.
+    Falls back to OCR postcode detection if dividers not found.
     Returns (x1, y1, x2, y2) pixel coords.
     """
     h, w = img.shape[:2]
+
+    # --- Strategy 1: Find horizontal divider lines (most reliable) ---
+    dividers = _find_horizontal_dividers(img)
+    # The delivery address sits in the LARGEST gap between consecutive mid-dividers
+    mid_dividers = [y for y in dividers if int(h * 0.40) < y < int(h * 0.92)]
+    if len(mid_dividers) >= 2:
+        # Find the largest gap between consecutive dividers (= address section)
+        best_top, best_bot, best_gap = mid_dividers[0], mid_dividers[1], 0
+        for i in range(len(mid_dividers) - 1):
+            gap = mid_dividers[i + 1] - mid_dividers[i]
+            if gap > best_gap:
+                best_gap = gap
+                best_top = mid_dividers[i]
+                best_bot = mid_dividers[i + 1]
+        x1 = 5
+        y1 = best_top + 5   # small buffer below the divider line
+        x2 = w - 5
+        y2 = best_bot - 2
+        print(f"Address zone from dividers (largest gap): y={best_top}..{best_bot}")
+        return x1, y1, x2, y2
+
+    # --- Strategy 2: OCR postcode detection ---
     data = _ocr_data(img, psm=6)
     n = len(data["text"])
     candidate_boxes = []
 
     for i in range(n):
         text = data["text"][i].strip()
-        # UK postcode pattern (includes typical returns like XX40 2HH)
         if re.match(r"^[A-Z]{1,2}[0-9][A-Z0-9]?[0-9][A-Z]{2}$", text.replace(' ', '')) or \
            re.match(r"^[A-Z]{1,2}[0-9][A-Z0-9]?\s[0-9][A-Z]{2}$", text):
             conf_raw = data["conf"][i]
@@ -198,31 +237,39 @@ def _find_delivery_address_box(img):
                 candidate_boxes.append((px, py, text))
 
     if not candidate_boxes:
-        # Fallback: exact zone for delivery address (bottom half, below barcode)
         x1 = int(w * 0.02)
         y1 = int(h * 0.52)
         x2 = int(w * 0.98)
         y2 = int(h * 0.74)
-        print("No postcode found by OCR -- using precise proportional fallback zone")
+        print("No postcode found by OCR -- using proportional fallback zone")
         return x1, y1, x2, y2
 
-    # Pick postcode closest to 60% down the label (delivery, not sender)
     best = sorted(candidate_boxes, key=lambda b: abs(b[1] - h * 0.60))[0]
     pc_x, pc_y, pc_text = best
-    
-    # Expand box to cover ~6 address lines above the postcode
+
     line_h = 30
-    box_x1 = max(0, pc_x - 20)
-    box_y1 = max(0, pc_y - line_h * 6)
-    
-    # Safeguard: Do not overlap the main barcode (which usually ends around 50%)
-    if box_y1 < int(h * 0.50):
-        box_y1 = int(h * 0.50)
-        
-    box_x2 = min(w, pc_x + 450)
+    box_x1 = 5
+    box_y1 = max(int(h * 0.50), pc_y - line_h * 6)
+    box_x2 = w - 5
     box_y2 = min(h, pc_y + line_h * 2)
-    print(f"Delivery address box: ({box_x1},{box_y1}) -> ({box_x2},{box_y2})  postcode={pc_text}")
+    print(f"Delivery address box (OCR): ({box_x1},{box_y1}) -> ({box_x2},{box_y2})  postcode={pc_text}")
     return box_x1, box_y1, box_x2, box_y2
+
+
+def _find_horizontal_dividers(img):
+    """
+    Detect full-width horizontal divider lines in label image.
+    Returns sorted list of y-positions where divider lines exist.
+    """
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if len(img.shape) == 3 else img
+    h, w = gray.shape
+    row_black = np.sum(gray < 100, axis=1)
+    dividers = []
+    for y in range(h):
+        if row_black[y] > w * 0.35:
+            if not dividers or y - dividers[-1] > 10:
+                dividers.append(y)
+    return dividers
 
 
 def _build_address_lines(warehouse):
@@ -244,7 +291,7 @@ def replace_delivery_address(img, warehouse):
     x1, y1, x2, y2 = box
     box_h = y2 - y1
 
-    # Wipe the old address
+    # Wipe the old address completely (full width)
     cv2.rectangle(img, (x1, y1), (x2, y2), (255, 255, 255), -1)
 
     # Font size relative to box height
@@ -254,10 +301,7 @@ def replace_delivery_address(img, warehouse):
 
     pil = _to_pil(img)
     draw = ImageDraw.Draw(pil)
-    try:
-        font = ImageFont.truetype("C:/Windows/Fonts/arial.ttf", font_size)
-    except Exception:
-        font = ImageFont.load_default()
+    font = _get_font(font_size)
 
     pad = 8
     ty = y1 + pad
@@ -310,29 +354,52 @@ def wipe_sender_address(img):
 
 def wipe_bottom_references(img):
     """
-    Erase extra order numbers, reference numbers, or small barcodes at the very bottom.
-    Preserves the standard 'Internal use' line unless extra bottom barcodes are present.
+    Erase extra order numbers, reference numbers, or symbols at the very bottom.
+    Uses divider line detection to avoid wiping the 'Post Office / Internal use' banner.
     """
     h, w = img.shape[:2]
-    # Only wipe the very bottom strip (below 88% of label height) to preserve the internal use divider line
-    y1 = int(h * 0.88)
-    
-    # Check if there's text/barcodes in the bottom strip before wiping
+
+    # Use divider detection to find the bottom zone to wipe
+    dividers = _find_horizontal_dividers(img)
+    # The last divider in the lower 80-95% range is the bottom banner's top line
+    banner_dividers = [y for y in dividers if int(h * 0.78) < y < int(h * 0.95)]
+
+    if banner_dividers:
+        # Wipe below the last divider (very bottom strip below the Post Office / Internal use box)
+        wipe_y = banner_dividers[-1] + 2
+    else:
+        wipe_y = int(h * 0.88)
+
+    # Check if there's text/symbols below banner line (e.g., order ref symbols)
     data = _ocr_data(img, psm=6)
     n = len(data["text"])
     has_bottom_data = False
     for i in range(n):
         if data["text"][i].strip():
-            if data["top"][i] >= y1:
+            if data["top"][i] >= wipe_y:
                 has_bottom_data = True
                 break
-                
+
     if has_bottom_data:
-        cv2.rectangle(img, (0, y1), (w, h), (255, 255, 255), -1)
-        print(f"Bottom reference numbers wiped from y={y1} to y={h}")
+        cv2.rectangle(img, (0, wipe_y), (w, h), (255, 255, 255), -1)
+        print(f"Bottom reference numbers wiped from y={wipe_y} to y={h}")
     else:
         print("No extra bottom reference text found -- preserving bottom section.")
-        
+
+    # Also wipe any stray symbols inside the address block right side (e.g. $IoI reference)
+    # These appear inside the address zone on the right side bottom
+    addr_dividers = [y for y in dividers if int(h * 0.40) < y < int(h * 0.85)]
+    if len(addr_dividers) >= 2:
+        gaps = [(addr_dividers[i+1] - addr_dividers[i], addr_dividers[i], addr_dividers[i+1])
+                for i in range(len(addr_dividers)-1)]
+        largest = max(gaps, key=lambda g: g[0])
+        _, top_addr, bot_addr = largest
+        # Wipe bottom-right quadrant of address section (where reference symbols appear)
+        sym_y1 = bot_addr - int((bot_addr - top_addr) * 0.3)
+        sym_x1 = int(w * 0.55)
+        cv2.rectangle(img, (sym_x1, sym_y1), (w, bot_addr), (255, 255, 255), -1)
+        print(f"Wiped stray symbols in address block bottom-right: x={sym_x1}..{w}, y={sym_y1}..{bot_addr}")
+
     return img
 
 
