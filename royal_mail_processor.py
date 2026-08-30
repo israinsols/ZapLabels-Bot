@@ -99,23 +99,24 @@ def _alter_one_digit(tracking):
 
 def alter_tracking_text_on_image(img):
     """
-    Locate the printed tracking number text (not the barcode bars),
+    Locate the printed tracking number text under the Code128 barcode,
     alter one digit, and paint the new text back over the original.
+    Works for both Tracked 24 (#OT794437107GB#) and Tracked 48 (#YR432371940609#) formats.
     """
     h_img, w_img = img.shape[:2]
+
+    # Scan a wider zone to pick up the barcode text line (20% to 70% of label height)
+    # Use psm=7 (single line) for the sub-region to get better barcode text OCR
+    words = []
     data = _ocr_data(img, psm=6)
     n = len(data["text"])
-    
-    # 1. Get words ONLY from middle section of label (30% to 65% height)
-    # to avoid header text like 'Postage Paid GB' at top right
-    words = []
+
     for i in range(n):
         w = data["text"][i].strip()
         if w:
             y1 = data["top"][i]
             y2 = y1 + data["height"][i]
-            # Restrict to middle height zone where tracking text lives
-            if y1 >= int(h_img * 0.30) and y2 <= int(h_img * 0.65):
+            if y1 >= int(h_img * 0.20) and y2 <= int(h_img * 0.70):
                 words.append({
                     "text": w,
                     "clean": re.sub(r'[^A-Z0-9]', '', w.upper()),
@@ -124,27 +125,44 @@ def alter_tracking_text_on_image(img):
                     "x2": data["left"][i] + data["width"][i],
                     "y2": y2
                 })
-            
+
     full_clean = "".join([w["clean"] for w in words])
     tracking_clean = None
-    
+
+    # Try standard Royal Mail tracking formats
     m = re.search(r'[A-Z]{2}[0-9]{8,14}[A-Z]{2}', full_clean)
-    if m: tracking_clean = m.group()
+    if m:
+        tracking_clean = m.group()
     else:
-        m2 = re.search(r'[0-9]{11,21}', full_clean)
-        if m2: tracking_clean = m2.group()
-        
+        m2 = re.search(r'[0-9]{9,21}', full_clean)
+        if m2:
+            tracking_clean = m2.group()
+
     if not tracking_clean:
-        print("Could not find written tracking number in middle zone -- skipping alter step")
+        # Fallback: scan just the barcode text region more aggressively (PSM 7 = single line)
+        bx1 = int(w_img * 0.25)
+        by1 = int(h_img * 0.35)
+        bx2 = w_img
+        by2 = int(h_img * 0.60)
+        roi = img[by1:by2, bx1:bx2]
+        gray_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+        roi_text = pytesseract.image_to_string(gray_roi, config='--oem 3 --psm 7').strip()
+        clean_roi = re.sub(r'[^A-Z0-9]', '', roi_text.upper())
+        m3 = re.search(r'[A-Z]{2}[0-9]{8,14}[A-Z]{2}|[0-9]{9,21}', clean_roi)
+        if m3:
+            tracking_clean = m3.group()
+            print(f"Tracking found via ROI PSM7: {tracking_clean}")
+
+    if not tracking_clean:
+        print("Could not find written tracking number -- skipping alter step")
         return img
-        
-    # 2. Find which words in the middle zone make up this tracking number
+
+    # Find which words make up this tracking number
     tracking_box = None
     original_text_parts = []
-    
+
     for w in words:
         if len(w["clean"]) >= 2 and w["clean"] in tracking_clean:
-            # It's part of the tracking number!
             original_text_parts.append(w["text"])
             if tracking_box is None:
                 tracking_box = [w["x1"], w["y1"], w["x2"], w["y2"]]
@@ -153,41 +171,50 @@ def alter_tracking_text_on_image(img):
                 tracking_box[1] = min(tracking_box[1], w["y1"])
                 tracking_box[2] = max(tracking_box[2], w["x2"])
                 tracking_box[3] = max(tracking_box[3], w["y2"])
-                
+
     if not tracking_box:
         print("Found tracking string but couldn't locate words -- skipping alter step")
         return img
-        
+
     tracking_found = " ".join(original_text_parts)
     print(f"Found tracking text: '{tracking_found}' at box {tracking_box}")
 
-    altered = _alter_one_digit(tracking_found)
+    # Only alter the digit part — preserve # prefix/suffix and letter codes
+    # Extract just the numeric part to alter one digit
+    def alter_numeric_part(text):
+        """Find the longest digit sequence and increment its last digit."""
+        nums = list(re.finditer(r'\d+', text))
+        if not nums:
+            return text
+        # Alter last digit of last number block
+        target = nums[-1]
+        digits = target.group()
+        new_last = str((int(digits[-1]) + 1) % 10)
+        new_digits = digits[:-1] + new_last
+        return text[:target.start()] + new_digits + text[target.end():]
+
+    altered = alter_numeric_part(tracking_found)
     print(f"Altered tracking: {tracking_found} -> {altered}")
 
-    if tracking_box:
-        x, y = tracking_box[0], tracking_box[1]
-        bw, bh = tracking_box[2] - tracking_box[0], tracking_box[3] - tracking_box[1]
-        
-        # Add slight margin to box
-        pad = 2
-        x1_w = max(0, x - pad)
-        y1_w = max(0, y - pad)
-        x2_w = min(w_img, x + bw + pad)
-        y2_w = min(h_img, y + bh + pad)
+    x, y = tracking_box[0], tracking_box[1]
+    bw, bh = tracking_box[2] - tracking_box[0], tracking_box[3] - tracking_box[1]
 
-        # Wipe old text with white rectangle
-        cv2.rectangle(img, (x1_w, y1_w), (x2_w, y2_w), (255, 255, 255), -1)
-        
-        # Render new text with PIL
-        pil = _to_pil(img)
-        draw = ImageDraw.Draw(pil)
-        font_size = max(12, int(bh * 0.85))
-        try:
-            font = ImageFont.truetype("C:/Windows/Fonts/arial.ttf", font_size)
-        except Exception:
-            font = ImageFont.load_default()
-        draw.text((x, y), altered, fill=(0, 0, 0), font=font)
-        img = _from_pil(pil)
+    # Wipe wider box to remove full barcode text line
+    pad_x = max(8, int(bw * 0.05))
+    pad_y = max(4, int(bh * 0.3))
+    x1_w = max(0, x - pad_x)
+    y1_w = max(0, y - pad_y)
+    x2_w = min(w_img, x + bw + pad_x)
+    y2_w = min(h_img, y + bh + pad_y)
+
+    cv2.rectangle(img, (x1_w, y1_w), (x2_w, y2_w), (255, 255, 255), -1)
+
+    pil = _to_pil(img)
+    draw = ImageDraw.Draw(pil)
+    font_size = max(10, int(bh * 0.85))
+    font = _get_font(font_size)
+    draw.text((x, y), altered, fill=(0, 0, 0), font=font)
+    img = _from_pil(pil)
 
     return img
 
