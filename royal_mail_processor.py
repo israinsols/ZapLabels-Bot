@@ -193,8 +193,8 @@ def alter_tracking_text_on_image(img):
         new_digits = digits[:-1] + new_last
         return text[:target.start()] + new_digits + text[target.end():]
 
-    # Format altered tracking cleanly with standard Royal Mail spacing
-    # Remove any unwanted internal multiple spaces
+    # Apply the alteration, then format cleanly with standard Royal Mail spacing
+    altered = alter_numeric_part(tracking_found)
     clean_nums = re.sub(r'[^A-Z0-9]', '', altered.upper())
     if len(clean_nums) == 13 and clean_nums[:2].isalpha() and clean_nums[-2:].isalpha():
         # Standard UK format e.g. #OT 7944 3710 8GB#
