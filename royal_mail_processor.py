@@ -193,18 +193,29 @@ def alter_tracking_text_on_image(img):
         new_digits = digits[:-1] + new_last
         return text[:target.start()] + new_digits + text[target.end():]
 
-    altered = alter_numeric_part(tracking_found)
-    print(f"Altered tracking: {tracking_found} -> {altered}")
+    # Format altered tracking cleanly with standard Royal Mail spacing
+    # Remove any unwanted internal multiple spaces
+    clean_nums = re.sub(r'[^A-Z0-9]', '', altered.upper())
+    if len(clean_nums) == 13 and clean_nums[:2].isalpha() and clean_nums[-2:].isalpha():
+        # Standard UK format e.g. #OT 7944 3710 8GB#
+        formatted_tracking = f"#{clean_nums[:2]} {clean_nums[2:6]} {clean_nums[6:10]} {clean_nums[10:]}#"
+    else:
+        formatted_tracking = re.sub(r'\s+', ' ', altered.strip())
+        if not formatted_tracking.startswith('#'): formatted_tracking = f"#{formatted_tracking}"
+        if not formatted_tracking.endswith('#'): formatted_tracking = f"{formatted_tracking}#"
 
+    print(f"Altered tracking: {tracking_found} -> {formatted_tracking}")
+
+    # Wipe old text with white rectangle
     x, y = tracking_box[0], tracking_box[1]
     bw, bh = tracking_box[2] - tracking_box[0], tracking_box[3] - tracking_box[1]
+    center_x = x + bw // 2
 
-    # Wipe wider box to remove full barcode text line
-    pad_x = max(8, int(bw * 0.05))
+    pad_x = max(15, int(bw * 0.15))
     pad_y = max(4, int(bh * 0.3))
-    x1_w = max(0, x - pad_x)
+    x1_w = max(0, center_x - bw // 2 - pad_x)
     y1_w = max(0, y - pad_y)
-    x2_w = min(w_img, x + bw + pad_x)
+    x2_w = min(w_img, center_x + bw // 2 + pad_x)
     y2_w = min(h_img, y + bh + pad_y)
 
     cv2.rectangle(img, (x1_w, y1_w), (x2_w, y2_w), (255, 255, 255), -1)
@@ -213,10 +224,35 @@ def alter_tracking_text_on_image(img):
     draw = ImageDraw.Draw(pil)
     font_size = max(10, int(bh * 0.85))
     font = _get_font(font_size)
-    draw.text((x, y), altered, fill=(0, 0, 0), font=font)
+
+    bbox = draw.textbbox((0, 0), formatted_tracking, font=font)
+    text_w = bbox[2] - bbox[0]
+    draw_x = max(0, center_x - text_w // 2)
+
+    draw.text((draw_x, y), formatted_tracking, fill=(0, 0, 0), font=font)
     img = _from_pil(pil)
 
     return img
+
+
+
+def _get_label_bounds(img):
+    """
+    Detect the left and right X boundaries of the white label card (in case of screenshots with dark margins).
+    Returns (left_x, right_x).
+    """
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if len(img.shape) == 3 else img
+    h, w = gray.shape
+
+    # Check for large white region (label body)
+    _, thresh = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY)
+    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    large_boxes = [cv2.boundingRect(c) for c in contours if cv2.boundingRect(c)[2] > w * 0.4 and cv2.boundingRect(c)[3] > h * 0.4]
+    if large_boxes:
+        bx, by, bw, bh = max(large_boxes, key=lambda b: b[2] * b[3])
+        return bx, bx + bw
+
+    return 0, w
 
 
 def _find_delivery_address_box(img):
@@ -226,6 +262,7 @@ def _find_delivery_address_box(img):
     Returns (x1, y1, x2, y2) pixel coords.
     """
     h, w = img.shape[:2]
+    lb_left, lb_right = _get_label_bounds(img)
 
     # --- Strategy 1: Find horizontal divider lines (most reliable) ---
     dividers = _find_horizontal_dividers(img)
@@ -240,12 +277,13 @@ def _find_delivery_address_box(img):
                 best_gap = gap
                 best_top = mid_dividers[i]
                 best_bot = mid_dividers[i + 1]
-        x1 = 5
-        y1 = best_top + 5   # small buffer below the divider line
-        x2 = w - 5
-        y2 = best_bot - 2
-        print(f"Address zone from dividers (largest gap): y={best_top}..{best_bot}")
+        x1 = lb_left + 4
+        y1 = best_top + 4   # small buffer below the divider line
+        x2 = lb_right - 4
+        y2 = best_bot - 3   # keep bottom divider line intact
+        print(f"Address zone from dividers (largest gap): x={x1}..{x2}, y={best_top}..{best_bot}")
         return x1, y1, x2, y2
+
 
     # --- Strategy 2: OCR postcode detection ---
     data = _ocr_data(img, psm=6)
@@ -421,11 +459,14 @@ def wipe_bottom_references(img):
                 for i in range(len(addr_dividers)-1)]
         largest = max(gaps, key=lambda g: g[0])
         _, top_addr, bot_addr = largest
-        # Wipe bottom-right quadrant of address section (where reference symbols appear)
+        lb_left, lb_right = _get_label_bounds(img)
+        # Wipe bottom-right quadrant of address section (strictly above bottom divider line)
         sym_y1 = bot_addr - int((bot_addr - top_addr) * 0.3)
-        sym_x1 = int(w * 0.55)
-        cv2.rectangle(img, (sym_x1, sym_y1), (w, bot_addr), (255, 255, 255), -1)
-        print(f"Wiped stray symbols in address block bottom-right: x={sym_x1}..{w}, y={sym_y1}..{bot_addr}")
+        sym_y2 = bot_addr - 3
+        sym_x1 = int(lb_left + (lb_right - lb_left) * 0.55)
+        sym_x2 = lb_right - 4
+        cv2.rectangle(img, (sym_x1, sym_y1), (sym_x2, sym_y2), (255, 255, 255), -1)
+        print(f"Wiped stray symbols in address block bottom-right: x={sym_x1}..{sym_x2}, y={sym_y1}..{sym_y2}")
 
     return img
 
