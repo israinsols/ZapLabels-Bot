@@ -222,7 +222,7 @@ def alter_tracking_text_on_image(img):
 
     pil = _to_pil(img)
     draw = ImageDraw.Draw(pil)
-    font_size = max(10, int(bh * 0.85))
+    font_size = max(13, int(w_img * 0.032))
     font = _get_font(font_size)
 
     bbox = draw.textbbox((0, 0), formatted_tracking, font=font)
