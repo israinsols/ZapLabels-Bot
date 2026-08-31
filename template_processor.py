@@ -136,11 +136,17 @@ class RoyalMailTemplateProcessor:
 
         if service == 'FTID' and warehouse:
             name = warehouse.get("name", "").strip()
-            address_parts = [p.strip() for p in warehouse.get("address", "").split(',') if p.strip()]
+            addr = warehouse.get("address", "").strip()
             postcode = warehouse.get("postcode", "").strip().upper()
-            lines = [name] + address_parts + [postcode]
+            parts = [p.strip() for p in addr.split(",") if p.strip()]
+            if len(parts) >= 2:
+                lines = [name, ", ".join(parts[:-1]), parts[-1], postcode]
+            elif len(parts) == 1:
+                lines = [name, parts[0], postcode]
+            else:
+                lines = [name, postcode]
         else:
-            lines = ["LIT Hub", "Returns Centre", "Unit 1", "London", "L1 1AA"]
+            lines = ["LIT Hub", "Returns Centre", "Unit 1, London", "L1 1AA"]
 
         start_x = 38
         start_y = 848

@@ -211,11 +211,11 @@ def alter_tracking_text_on_image(img):
     bw, bh = tracking_box[2] - tracking_box[0], tracking_box[3] - tracking_box[1]
     center_x = x + bw // 2
 
-    pad_x = max(15, int(bw * 0.15))
+    # Wipe full width under 1D barcode to eliminate any leftover suffix fragments
     pad_y = max(4, int(bh * 0.3))
-    x1_w = max(0, center_x - bw // 2 - pad_x)
+    x1_w = max(0, min(x - 20, int(w_img * 0.38)))
     y1_w = max(0, y - pad_y)
-    x2_w = min(w_img, center_x + bw // 2 + pad_x)
+    x2_w = min(w_img, max(x + bw + 30, int(w_img * 0.88)))
     y2_w = min(h_img, y + bh + pad_y)
 
     cv2.rectangle(img, (x1_w, y1_w), (x2_w, y2_w), (255, 255, 255), -1)
@@ -338,12 +338,21 @@ def _find_horizontal_dividers(img):
 
 
 def _build_address_lines(warehouse):
-    """Format warehouse dict into Royal Mail style address lines."""
-    addr = warehouse.get("address", "")
+    """Format warehouse dict into authentic Royal Mail style address lines (3-4 lines)."""
     name = warehouse.get("name", "").strip()
+    addr = warehouse.get("address", "").strip()
     postcode = warehouse.get("postcode", "").strip().upper()
+
     parts = [p.strip() for p in addr.split(",") if p.strip()]
-    lines = [name] + parts + [postcode]
+    if len(parts) >= 2:
+        street = ", ".join(parts[:-1])
+        city = parts[-1]
+        lines = [name, street, city, postcode]
+    elif len(parts) == 1:
+        lines = [name, parts[0], postcode]
+    else:
+        lines = [name, postcode]
+
     return [l for l in lines if l]
 
 
@@ -355,28 +364,32 @@ def replace_delivery_address(img, warehouse):
         return img
     x1, y1, x2, y2 = box
     box_h = y2 - y1
+    h, w = img.shape[:2]
+    lb_left, lb_right = _get_label_bounds(img)
 
-    # Wipe the old address completely (full width)
+    # Wipe the old address completely
     cv2.rectangle(img, (x1, y1), (x2, y2), (255, 255, 255), -1)
 
-    # Font size relative to box height
-    num_lines = 5
-    font_size = max(14, box_h // (num_lines + 2))
+    # Font size proportional to label width (matching authentic Royal Mail 1:1)
+    font_size = max(11, int(w * 0.033))
+    font = _get_font(font_size)
+    line_step = int(font_size * 1.38)
     lines = _build_address_lines(warehouse)
 
     pil = _to_pil(img)
     draw = ImageDraw.Draw(pil)
-    font = _get_font(font_size)
 
-    pad = 8
-    ty = y1 + pad
+    start_x = lb_left + max(8, int((lb_right - lb_left) * 0.024))
+    start_y = y1 + max(8, int(box_h * 0.07))
+
     for line in lines:
-        draw.text((x1 + pad, ty), line, fill=(0, 0, 0), font=font)
-        ty += font_size + 8
+        draw.text((start_x, start_y), line, fill=(0, 0, 0), font=font)
+        start_y += line_step
 
     img = _from_pil(pil)
-    print(f"Delivery address replaced: {lines}")
+    print(f"Delivery address replaced with matching style: {lines}")
     return img
+
 
 
 def wipe_sender_address(img):
