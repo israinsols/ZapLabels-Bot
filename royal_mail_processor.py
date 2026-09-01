@@ -97,6 +97,17 @@ def _alter_one_digit(tracking):
     return tracking
 
 
+def _format_royal_mail_tracking(tracking):
+    """Format Royal Mail tracking with clean standard spacing: #AA NNNN NNNN NGB#"""
+    clean = re.sub(r'[^A-Z0-9]', '', str(tracking).upper())
+    if len(clean) == 13 and clean[:2].isalpha():
+        return f"#{clean[:2]} {clean[2:6]} {clean[6:10]} {clean[10:]}#"
+    elif len(clean) >= 12:
+        return f"#{clean[:2]} {clean[2:6]} {clean[6:10]} {clean[10:]}#"
+    else:
+        return f"#{clean}#"
+
+
 def alter_tracking_text_on_image(img):
     """
     Locate the printed tracking number text under the Code128 barcode,
@@ -105,121 +116,95 @@ def alter_tracking_text_on_image(img):
     """
     h_img, w_img = img.shape[:2]
 
-    # Scan a wider zone to pick up the barcode text line (20% to 70% of label height)
-    # Use psm=7 (single line) for the sub-region to get better barcode text OCR
-    words = []
+    # 1. First, try to get the 100% complete true tracking number from DataMatrix payload
+    true_tracking = None
+    try:
+        from datamatrix_processor import DataMatrixProcessor
+        decoded_obj, _, _ = DataMatrixProcessor.detect_datamatrix(img)
+        if decoded_obj:
+            payload = decoded_obj.data.decode('utf-8', errors='ignore')
+            # Standard Royal Mail 13-char tracking e.g. YR432371940GB or OT794438106GB
+            m = re.search(r'([A-Z]{2}[0-9]{8,14}[A-Z]{2})', payload)
+            if m and not m.group(1).startswith('GB') and not m.group(1).startswith('XX'):
+                true_tracking = m.group(1)
+            else:
+                m2 = re.search(r'([A-Z]{2}[0-9]{8,14})', payload)
+                if m2:
+                    true_tracking = m2.group(1)
+                else:
+                    m3 = re.search(r'([0-9]{11,21})', payload)
+                    if m3:
+                        true_tracking = m3.group(1)
+            if true_tracking:
+                print(f"✅ Extracted pristine tracking from DataMatrix: {true_tracking}")
+    except Exception as e:
+        print(f"DataMatrix tracking extraction: {e}")
+
+    # 2. Locate the tracking text box under the 1D barcode on the label
     data = _ocr_data(img, psm=6)
     n = len(data["text"])
+    words = []
+    tracking_box = None
 
     for i in range(n):
         w = data["text"][i].strip()
         if w:
             y1 = data["top"][i]
             y2 = y1 + data["height"][i]
-            if y1 >= int(h_img * 0.20) and y2 <= int(h_img * 0.70):
-                words.append({
-                    "text": w,
-                    "clean": re.sub(r'[^A-Z0-9]', '', w.upper()),
-                    "x1": data["left"][i],
-                    "y1": y1,
-                    "x2": data["left"][i] + data["width"][i],
-                    "y2": y2
-                })
+            x1 = data["left"][i]
+            x2 = x1 + data["width"][i]
+            # Restrict strictly to zone below 1D barcode (40% to 58% height, right half of label)
+            if y1 >= int(h_img * 0.40) and y2 <= int(h_img * 0.58) and x1 >= int(w_img * 0.30):
+                clean = re.sub(r'[^A-Z0-9]', '', w.upper())
+                words.append({"text": w, "clean": clean, "x1": x1, "y1": y1, "x2": x2, "y2": y2})
+                if '#' in w or (true_tracking and clean and len(clean) >= 2 and clean in true_tracking) or re.search(r'^[A-Z]{2}[0-9]|[0-9]{4,}', clean):
+                    if tracking_box is None:
+                        tracking_box = [x1, y1, x2, y2]
+                    else:
+                        tracking_box[0] = min(tracking_box[0], x1)
+                        tracking_box[1] = min(tracking_box[1], y1)
+                        tracking_box[2] = max(tracking_box[2], x2)
+                        tracking_box[3] = max(tracking_box[3], y2)
 
-    full_clean = "".join([w["clean"] for w in words])
-    tracking_clean = None
+    # If DataMatrix did not yield tracking, fallback to OCR words
+    if not true_tracking:
+        full_clean = "".join([w["clean"] for w in words])
+        m = re.search(r'[A-Z]{2}[0-9]{8,14}[A-Z]{2}', full_clean)
+        if m:
+            true_tracking = m.group()
+        else:
+            m2 = re.search(r'[0-9]{9,21}', full_clean)
+            if m2:
+                true_tracking = m2.group()
 
-    # Try standard Royal Mail tracking formats
-    m = re.search(r'[A-Z]{2}[0-9]{8,14}[A-Z]{2}', full_clean)
-    if m:
-        tracking_clean = m.group()
-    else:
-        m2 = re.search(r'[0-9]{9,21}', full_clean)
-        if m2:
-            tracking_clean = m2.group()
-
-    if not tracking_clean:
-        # Fallback: scan just the barcode text region more aggressively (PSM 7 = single line)
-        bx1 = int(w_img * 0.25)
-        by1 = int(h_img * 0.35)
-        bx2 = w_img
-        by2 = int(h_img * 0.60)
-        roi = img[by1:by2, bx1:bx2]
-        gray_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
-        roi_text = pytesseract.image_to_string(gray_roi, config='--oem 3 --psm 7').strip()
-        clean_roi = re.sub(r'[^A-Z0-9]', '', roi_text.upper())
-        m3 = re.search(r'[A-Z]{2}[0-9]{8,14}[A-Z]{2}|[0-9]{9,21}', clean_roi)
-        if m3:
-            tracking_clean = m3.group()
-            print(f"Tracking found via ROI PSM7: {tracking_clean}")
-
-    if not tracking_clean:
-        print("Could not find written tracking number -- skipping alter step")
+    if not true_tracking:
+        print("Could not find tracking number -- skipping alter step")
         return img
 
-    # Find which words make up this tracking number
-    tracking_box = None
-    original_text_parts = []
+    # 3. Alter 1 digit and format cleanly
+    altered = _alter_one_digit(true_tracking)
+    formatted_tracking = _format_royal_mail_tracking(altered)
+    print(f"Tracking altered: {true_tracking} -> {altered} (formatted: {formatted_tracking})")
 
-    for w in words:
-        if len(w["clean"]) >= 2 and w["clean"] in tracking_clean:
-            original_text_parts.append(w["text"])
-            if tracking_box is None:
-                tracking_box = [w["x1"], w["y1"], w["x2"], w["y2"]]
-            else:
-                tracking_box[0] = min(tracking_box[0], w["x1"])
-                tracking_box[1] = min(tracking_box[1], w["y1"])
-                tracking_box[2] = max(tracking_box[2], w["x2"])
-                tracking_box[3] = max(tracking_box[3], w["y2"])
-
-    if not tracking_box:
-        print("Found tracking string but couldn't locate words -- skipping alter step")
-        return img
-
-    tracking_found = " ".join(original_text_parts)
-    print(f"Found tracking text: '{tracking_found}' at box {tracking_box}")
-
-    # Only alter the digit part — preserve # prefix/suffix and letter codes
-    # Extract just the numeric part to alter one digit
-    def alter_numeric_part(text):
-        """Find the longest digit sequence and increment its last digit."""
-        nums = list(re.finditer(r'\d+', text))
-        if not nums:
-            return text
-        # Alter last digit of last number block
-        target = nums[-1]
-        digits = target.group()
-        new_last = str((int(digits[-1]) + 1) % 10)
-        new_digits = digits[:-1] + new_last
-        return text[:target.start()] + new_digits + text[target.end():]
-
-    # Apply the alteration, then format cleanly with standard Royal Mail spacing
-    altered = alter_numeric_part(tracking_found)
-    clean_nums = re.sub(r'[^A-Z0-9]', '', altered.upper())
-    if len(clean_nums) == 13 and clean_nums[:2].isalpha() and clean_nums[-2:].isalpha():
-        # Standard UK format e.g. #OT 7944 3710 8GB#
-        formatted_tracking = f"#{clean_nums[:2]} {clean_nums[2:6]} {clean_nums[6:10]} {clean_nums[10:]}#"
+    # 4. Position calculation
+    if tracking_box:
+        x, y = tracking_box[0], tracking_box[1]
+        bw, bh = tracking_box[2] - tracking_box[0], tracking_box[3] - tracking_box[1]
+        center_x = x + bw // 2
+        y_pos = y
     else:
-        formatted_tracking = re.sub(r'\s+', ' ', altered.strip())
-        if not formatted_tracking.startswith('#'): formatted_tracking = f"#{formatted_tracking}"
-        if not formatted_tracking.endswith('#'): formatted_tracking = f"{formatted_tracking}#"
-
-    print(f"Altered tracking: {tracking_found} -> {formatted_tracking}")
-
-    # Wipe old text with white rectangle
-    x, y = tracking_box[0], tracking_box[1]
-    bw, bh = tracking_box[2] - tracking_box[0], tracking_box[3] - tracking_box[1]
-    center_x = x + bw // 2
-
-    # Wipe full width under 1D barcode to eliminate any leftover suffix fragments
-    pad_y = max(4, int(bh * 0.3))
-    x1_w = max(0, min(x - 20, int(w_img * 0.38)))
-    y1_w = max(0, y - pad_y)
-    x2_w = min(w_img, max(x + bw + 30, int(w_img * 0.88)))
-    y2_w = min(h_img, y + bh + pad_y)
+        center_x = int(w_img * 0.63)
+        y_pos = int(h_img * 0.48)
+        bh = int(h_img * 0.03)    # 5. Wipe width under 1D barcode cleanly
+    pad_y = max(3, int(bh * 0.25))
+    x1_w = max(0, min(center_x - 120, int(w_img * 0.38)))
+    y1_w = max(0, y_pos - pad_y)
+    x2_w = min(w_img, max(center_x + 120, int(w_img * 0.88)))
+    y2_w = min(h_img, y_pos + bh + pad_y)
 
     cv2.rectangle(img, (x1_w, y1_w), (x2_w, y2_w), (255, 255, 255), -1)
 
+    # 6. Render new tracking text centered with matching size
     pil = _to_pil(img)
     draw = ImageDraw.Draw(pil)
     font_size = max(13, int(w_img * 0.032))
@@ -229,7 +214,7 @@ def alter_tracking_text_on_image(img):
     text_w = bbox[2] - bbox[0]
     draw_x = max(0, center_x - text_w // 2)
 
-    draw.text((draw_x, y), formatted_tracking, fill=(0, 0, 0), font=font)
+    draw.text((draw_x, y_pos), formatted_tracking, fill=(0, 0, 0), font=font)
     img = _from_pil(pil)
 
     return img
@@ -255,33 +240,28 @@ def _get_label_bounds(img):
     return 0, w
 
 
-def _find_delivery_address_box(img):
+def _find_delivery_address_box(img, orig_img=None):
     """
-    Use horizontal divider line detection to find the delivery address zone.
+    Use horizontal divider line detection on pristine image to find the delivery address zone.
     Falls back to OCR postcode detection if dividers not found.
     Returns (x1, y1, x2, y2) pixel coords.
     """
-    h, w = img.shape[:2]
-    lb_left, lb_right = _get_label_bounds(img)
+    ref_img = orig_img if orig_img is not None else img
+    h, w = ref_img.shape[:2]
+    lb_left, lb_right = _get_label_bounds(ref_img)
 
-    # --- Strategy 1: Find horizontal divider lines (most reliable) ---
-    dividers = _find_horizontal_dividers(img)
+    # --- Strategy 1: Find horizontal divider lines on pristine image ---
+    dividers = _find_horizontal_dividers(ref_img)
     # The delivery address sits in the LARGEST gap between consecutive mid-dividers
-    mid_dividers = [y for y in dividers if int(h * 0.40) < y < int(h * 0.92)]
+    mid_dividers = [y for y in dividers if int(h * 0.35) < y < int(h * 0.95)]
     if len(mid_dividers) >= 2:
-        # Find the largest gap between consecutive dividers (= address section)
-        best_top, best_bot, best_gap = mid_dividers[0], mid_dividers[1], 0
-        for i in range(len(mid_dividers) - 1):
-            gap = mid_dividers[i + 1] - mid_dividers[i]
-            if gap > best_gap:
-                best_gap = gap
-                best_top = mid_dividers[i]
-                best_bot = mid_dividers[i + 1]
+        gaps = [(mid_dividers[i + 1] - mid_dividers[i], mid_dividers[i], mid_dividers[i + 1]) for i in range(len(mid_dividers) - 1)]
+        best_gap, best_top, best_bot = max(gaps, key=lambda g: g[0])
         x1 = lb_left + 4
         y1 = best_top + 4   # small buffer below the divider line
         x2 = lb_right - 4
         y2 = best_bot - 3   # keep bottom divider line intact
-        print(f"Address zone from dividers (largest gap): x={x1}..{x2}, y={best_top}..{best_bot}")
+        print(f"Address zone from dividers (largest gap): x={x1}..{x2}, y={best_top}..{best_bot} (height={best_gap})")
         return x1, y1, x2, y2
 
 
@@ -356,9 +336,9 @@ def _build_address_lines(warehouse):
     return [l for l in lines if l]
 
 
-def replace_delivery_address(img, warehouse):
+def replace_delivery_address(img, warehouse, orig_img=None):
     """Wipe old delivery address and write new 3PL address in matching style."""
-    box = _find_delivery_address_box(img)
+    box = _find_delivery_address_box(img, orig_img=orig_img)
     if box is None:
         print("Could not locate delivery address box")
         return img
@@ -581,7 +561,7 @@ class RoyalMailProcessor:
             img = alter_tracking_text_on_image(img)
 
             print("\nStep 3: Replacing delivery address with 3PL...")
-            img = replace_delivery_address(img, warehouse)
+            img = replace_delivery_address(img, warehouse, orig_img=orig_img)
 
             print("\nStep 4: Wiping sender address...")
             img = wipe_sender_address(img)
