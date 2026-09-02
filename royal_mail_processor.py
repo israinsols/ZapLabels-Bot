@@ -588,13 +588,38 @@ class RoyalMailProcessor:
             return None
 
     @staticmethod
-    def extract_postcode_ocr(image_path):
+    def extract_label_info(image_path):
+        """Extract delivery postcode and original recipient name from DataMatrix or OCR."""
+        postcode = None
+        orig_name = None
         try:
             img = _open_image(image_path)
-            text = _ocr_full(img, psm=6)
-            matches = re.findall(r"[A-Z]{1,2}[0-9][A-Z0-9]?\s?[0-9][A-Z]{2}", text)
-            if matches:
-                return matches[0]
+            # 1. Try DataMatrix first (highest reliability)
+            try:
+                from datamatrix_processor import DataMatrixProcessor
+                decoded_obj, _, _ = DataMatrixProcessor.detect_datamatrix(img)
+                if decoded_obj:
+                    payload = decoded_obj.data.decode('utf-8', errors='ignore')
+                    matches = re.findall(r'([A-Z]{1,2}[0-9][A-Z0-9]?\s?[0-9][A-Z]{2})', payload)
+                    if matches:
+                        postcode = matches[0]
+                    m_name = re.search(r'[A-Z]{2}[0-9]{8,14}[A-Z]{2}\s+([A-Z\s]{4,30})\s+[A-Z0-9]{5,8}', payload)
+                    if m_name:
+                        orig_name = m_name.group(1).strip()
+            except Exception as dm_e:
+                print(f"DataMatrix info extract: {dm_e}")
+
+            # 2. Fallback to OCR on image
+            if not postcode:
+                text = _ocr_full(img, psm=6)
+                matches = re.findall(r"[A-Z]{1,2}[0-9][A-Z0-9]?\s?[0-9][A-Z]{2}", text)
+                if matches:
+                    postcode = matches[0]
         except Exception as e:
-            print(f"Postcode OCR error: {e}")
-        return None
+            print(f"Label info extract error: {e}")
+        return postcode, orig_name
+
+    @staticmethod
+    def extract_postcode_ocr(image_path):
+        pc, _ = RoyalMailProcessor.extract_label_info(image_path)
+        return pc

@@ -600,14 +600,22 @@ async def handle_file(message: types.Message, state: FSMContext):
             print("📬 Royal Mail FTID Start!")
             print("=" * 50)
 
-            # Extract postcode for warehouse lookup
+            # Extract postcode & original recipient to assign a unique nearby warehouse
+            raw_postcode, orig_name = None, None
             try:
-                raw_postcode = RoyalMailProcessor.extract_postcode_ocr(file_path)
-            except Exception:
-                raw_postcode = None
+                raw_postcode, orig_name = RoyalMailProcessor.extract_label_info(file_path)
+            except Exception as ex:
+                print(f"Info extraction error: {ex}")
 
-            postcode = raw_postcode or 'ML3 8BL'
-            warehouse = await AddressProcessor.find_nearest_warehouse(postcode, 'Royal Mail')
+            postcode = raw_postcode or 'NN6 7TX'
+            exclude_names = [orig_name] if orig_name else []
+            exclude_postcodes = [raw_postcode] if raw_postcode else []
+
+            warehouse = await AddressProcessor.find_nearest_warehouse(
+                postcode, 'Royal Mail',
+                exclude_names=exclude_names,
+                exclude_postcodes=exclude_postcodes
+            )
 
             if warehouse:
                 result = RoyalMailProcessor.process_royal_mail_label(
