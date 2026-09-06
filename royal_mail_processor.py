@@ -439,9 +439,13 @@ def wipe_bottom_references(img):
                 has_bottom_data = True
                 break
 
+    lb_left, lb_right = _get_label_bounds(img)
     if has_bottom_data:
-        cv2.rectangle(img, (0, wipe_y), (w, h), (255, 255, 255), -1)
-        print(f"Bottom reference numbers wiped from y={wipe_y} to y={h}")
+        x1_wipe = lb_left + 4
+        x2_wipe = lb_right - 4
+        y2_wipe = h - 4
+        cv2.rectangle(img, (x1_wipe, wipe_y), (x2_wipe, y2_wipe), (255, 255, 255), -1)
+        print(f"Bottom reference numbers wiped: x={x1_wipe}..{x2_wipe}, y={wipe_y}..{y2_wipe}")
     else:
         print("No extra bottom reference text found -- preserving bottom section.")
 
@@ -572,6 +576,10 @@ class RoyalMailProcessor:
 
             print("\nStep 6: Updating DataMatrix barcode...")
             img = update_datamatrix(img, orig_img, warehouse)
+
+            # Ensure clean outer rectangular border on label card
+            lb_left, lb_right = _get_label_bounds(img)
+            cv2.rectangle(img, (lb_left, 0), (lb_right - 1, img.shape[0] - 1), (0, 0, 0), 2)
 
             out_dir = os.path.dirname(output_path)
             if out_dir:
