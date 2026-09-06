@@ -304,15 +304,16 @@ def _find_delivery_address_box(img, orig_img=None):
 def _find_horizontal_dividers(img):
     """
     Detect full-width horizontal divider lines in label image.
+    Uses gray < 160 to reliably detect light gray, anti-aliased, and standard divider lines.
     Returns sorted list of y-positions where divider lines exist.
     """
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if len(img.shape) == 3 else img
     h, w = gray.shape
-    row_black = np.sum(gray < 100, axis=1)
+    row_dark = np.sum(gray < 160, axis=1)
     dividers = []
     for y in range(h):
-        if row_black[y] > w * 0.35:
-            if not dividers or y - dividers[-1] > 10:
+        if row_dark[y] > w * 0.45:
+            if not dividers or y - dividers[-1] > 15:
                 dividers.append(y)
     return dividers
 
