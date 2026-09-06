@@ -580,8 +580,10 @@ class RoyalMailProcessor:
             img = update_datamatrix(img, orig_img, warehouse)
 
             # Ensure clean outer rectangular border on label card
-            lb_left, lb_right = _get_label_bounds(img)
-            cv2.rectangle(img, (lb_left, 0), (lb_right - 1, img.shape[0] - 1), (0, 0, 0), 2)
+            # Draw at 3px inset so border is never clipped by JPEG/Telegram
+            h_out, w_out = img.shape[:2]
+            bx1, by1, bx2, by2 = 3, 3, w_out - 4, h_out - 4
+            cv2.rectangle(img, (bx1, by1), (bx2, by2), (0, 0, 0), 2)
 
             out_dir = os.path.dirname(output_path)
             if out_dir:
