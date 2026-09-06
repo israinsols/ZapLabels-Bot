@@ -195,7 +195,8 @@ def alter_tracking_text_on_image(img):
     else:
         center_x = int(w_img * 0.63)
         y_pos = int(h_img * 0.48)
-        pad_y = max(3, int(bh * 0.25))
+        bh = int(h_img * 0.03)
+    pad_y = max(3, int(bh * 0.25))
     x1_w = max(0, min(center_x - 120, int(w_img * 0.38)))
     y1_w = max(0, y_pos - pad_y)
     x2_w = min(w_img - 6, max(center_x + 120, int(w_img * 0.88)))
