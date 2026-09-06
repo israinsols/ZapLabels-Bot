@@ -195,11 +195,10 @@ def alter_tracking_text_on_image(img):
     else:
         center_x = int(w_img * 0.63)
         y_pos = int(h_img * 0.48)
-        bh = int(h_img * 0.03)    # 5. Wipe width under 1D barcode cleanly
-    pad_y = max(3, int(bh * 0.25))
+        pad_y = max(3, int(bh * 0.25))
     x1_w = max(0, min(center_x - 120, int(w_img * 0.38)))
     y1_w = max(0, y_pos - pad_y)
-    x2_w = min(w_img, max(center_x + 120, int(w_img * 0.88)))
+    x2_w = min(w_img - 6, max(center_x + 120, int(w_img * 0.88)))
     y2_w = min(h_img, y_pos + bh + pad_y)
 
     cv2.rectangle(img, (x1_w, y1_w), (x2_w, y2_w), (255, 255, 255), -1)
@@ -348,8 +347,10 @@ def replace_delivery_address(img, warehouse, orig_img=None):
     h, w = img.shape[:2]
     lb_left, lb_right = _get_label_bounds(img)
 
-    # Wipe the old address completely
-    cv2.rectangle(img, (x1, y1), (x2, y2), (255, 255, 255), -1)
+    # Wipe the old address safely inside borders
+    x1_safe = max(6, x1)
+    x2_safe = min(w - 6, x2)
+    cv2.rectangle(img, (x1_safe, y1), (x2_safe, y2), (255, 255, 255), -1)
 
     # Font size proportional to label width (matching authentic Royal Mail 1:1)
     font_size = max(11, int(w * 0.033))
@@ -441,9 +442,9 @@ def wipe_bottom_references(img):
 
     lb_left, lb_right = _get_label_bounds(img)
     if has_bottom_data:
-        x1_wipe = lb_left + 4
-        x2_wipe = lb_right - 4
-        y2_wipe = h - 4
+        x1_wipe = max(6, lb_left + 4)
+        x2_wipe = min(w - 6, lb_right - 4)
+        y2_wipe = h - 6
         cv2.rectangle(img, (x1_wipe, wipe_y), (x2_wipe, y2_wipe), (255, 255, 255), -1)
         print(f"Bottom reference numbers wiped: x={x1_wipe}..{x2_wipe}, y={wipe_y}..{y2_wipe}")
     else:
@@ -462,7 +463,7 @@ def wipe_bottom_references(img):
         sym_y1 = bot_addr - int((bot_addr - top_addr) * 0.3)
         sym_y2 = bot_addr - 3
         sym_x1 = int(lb_left + (lb_right - lb_left) * 0.55)
-        sym_x2 = lb_right - 4
+        sym_x2 = min(w - 6, lb_right - 4)
         cv2.rectangle(img, (sym_x1, sym_y1), (sym_x2, sym_y2), (255, 255, 255), -1)
         print(f"Wiped stray symbols in address block bottom-right: x={sym_x1}..{sym_x2}, y={sym_y1}..{sym_y2}")
 
