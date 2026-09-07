@@ -270,6 +270,112 @@ REAL_UK_WAREHOUSES = [
         'latitude': 54.6712,
         'longitude': -5.9912,
         'carrier': 'Royal Mail'
+    },
+
+    # --- GXO Logistics (formerly Clipper Logistics) UK Sites ---
+    {
+        'name': 'GXO Logistics Brighouse',
+        'address': 'Armytage Road, Brighouse, West Yorkshire',
+        'postcode': 'HD6 1UJ',
+        'latitude': 53.7012,
+        'longitude': -1.7782,
+        'carrier': 'Royal Mail'
+    },
+    {
+        'name': 'GXO Logistics Sheffield',
+        'address': '615 Shepcote Lane, Tinsley, Sheffield',
+        'postcode': 'S9 1RF',
+        'latitude': 53.4012,
+        'longitude': -1.3912,
+        'carrier': 'Royal Mail'
+    },
+    {
+        'name': 'GXO Logistics Trafford Park',
+        'address': 'Westinghouse Road, Trafford Park, Manchester',
+        'postcode': 'M17 1PY',
+        'latitude': 53.4712,
+        'longitude': -2.3312,
+        'carrier': 'Royal Mail'
+    },
+    {
+        'name': 'GXO Logistics Normanton',
+        'address': 'Foxbridge Way, Normanton Industrial Estate, Normanton',
+        'postcode': 'WF6 1TL',
+        'latitude': 53.6912,
+        'longitude': -1.4212,
+        'carrier': 'Royal Mail'
+    },
+    {
+        'name': 'GXO Logistics Rugby',
+        'address': 'Valley Drive, Valley Cross, Rugby',
+        'postcode': 'CV21 1TN',
+        'latitude': 52.3712,
+        'longitude': -1.2612,
+        'carrier': 'Royal Mail'
+    },
+    {
+        'name': 'GXO Logistics Coventry',
+        'address': '100 Scimitar Way, Coventry',
+        'postcode': 'CV3 4PJ',
+        'latitude': 52.3912,
+        'longitude': -1.4712,
+        'carrier': 'Royal Mail'
+    },
+    {
+        'name': 'GXO Logistics Alfreton',
+        'address': 'West Way, Somercotes, Alfreton, Derbyshire',
+        'postcode': 'DE55 4QJ',
+        'latitude': 53.0712,
+        'longitude': -1.3512,
+        'carrier': 'Royal Mail'
+    },
+    {
+        'name': 'GXO Logistics Peterborough',
+        'address': 'Shrewsbury Avenue, Peterborough',
+        'postcode': 'PE2 7LB',
+        'latitude': 52.5612,
+        'longitude': -0.2512,
+        'carrier': 'Royal Mail'
+    },
+    {
+        'name': 'GXO Logistics Widnes',
+        'address': 'Gorsey Lane, Mersey Gateway, Widnes',
+        'postcode': 'WA8 0RP',
+        'latitude': 53.3612,
+        'longitude': -2.7312,
+        'carrier': 'Royal Mail'
+    },
+    {
+        'name': 'GXO Logistics Bridgwater',
+        'address': 'Bristol Road, Express Park, Bridgwater, Somerset',
+        'postcode': 'TA6 4RN',
+        'latitude': 51.1212,
+        'longitude': -3.0012,
+        'carrier': 'Royal Mail'
+    },
+    {
+        'name': 'GXO Logistics Maidstone',
+        'address': 'St Barnabas Close, Allington, Maidstone, Kent',
+        'postcode': 'ME16 0LW',
+        'latitude': 51.2812,
+        'longitude': 0.4912,
+        'carrier': 'Royal Mail'
+    },
+    {
+        'name': 'GXO Logistics Motherwell',
+        'address': 'Brittain Way, Motherwell, Lanarkshire',
+        'postcode': 'ML1 4XJ',
+        'latitude': 55.7812,
+        'longitude': -3.9912,
+        'carrier': 'Royal Mail'
+    },
+    {
+        'name': 'GXO Logistics Bury St Edmunds',
+        'address': 'Fortress Way, Suffolk Park Distribution Centre, Bury St Edmunds',
+        'postcode': 'IP32 7FQ',
+        'latitude': 52.2412,
+        'longitude': 0.7212,
+        'carrier': 'Royal Mail'
     }
 ]
 
