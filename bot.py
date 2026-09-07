@@ -607,7 +607,8 @@ async def handle_file(message: types.Message, state: FSMContext):
             except Exception as ex:
                 print(f"Info extraction error: {ex}")
 
-            postcode = raw_postcode or 'NN6 7TX'
+            # Use B1 1AA (Birmingham) as fallback — central England, avoids biasing toward NDC/Northampton
+            postcode = raw_postcode if raw_postcode and not raw_postcode.upper().startswith('XX') else 'B1 1AA'
             exclude_names = [orig_name] if orig_name else []
             exclude_postcodes = [raw_postcode] if raw_postcode else []
 

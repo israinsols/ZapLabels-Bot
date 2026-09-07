@@ -436,18 +436,49 @@ class AddressProcessor:
         exclude_names = [n.upper().strip() for n in (exclude_names or []) if n]
         exclude_postcodes = [p.upper().replace(' ', '').strip() for p in (exclude_postcodes or []) if p]
 
+        # Always exclude generic Nike Returns / NDC hub — these are returns addresses not 3PL delivery
+        ALWAYS_EXCLUDE_KEYWORDS = ['NATIONAL DISTRIBUTION', 'NATIONAL DISTRUBITION', 'NIKE RETURNS', 'NDC']
+
+        def is_excluded(wh):
+            wh_name_up = wh['name'].upper().strip()
+            wh_pc_up = wh['postcode'].upper().replace(' ', '').strip()
+            # Hard-coded keyword exclusion (partial match)
+            for kw in ALWAYS_EXCLUDE_KEYWORDS:
+                if kw in wh_name_up:
+                    return True
+            # Caller-supplied name exclusion (fuzzy partial match)
+            for ex_name in exclude_names:
+                # Check if 3+ consecutive words match (handles typos)
+                ex_words = ex_name.split()
+                wh_words = wh_name_up.split()
+                overlap = sum(1 for w in ex_words if w in wh_words)
+                if overlap >= 2:
+                    return True
+                # Also exact full match
+                if ex_name == wh_name_up:
+                    return True
+            # Postcode exclusion
+            if wh_pc_up in exclude_postcodes:
+                return True
+            return False
+
         delivery_coords = AddressProcessor.get_coordinates(postcode)
 
         carrier_key = 'Royal Mail' if 'royal' in carrier.lower() or 'mail' in carrier.lower() else carrier
         candidates = [
             w for w in REAL_UK_WAREHOUSES
             if (w['carrier'] == carrier_key or w['carrier'] == 'All')
-            and w['name'].upper().strip() not in exclude_names
-            and w['postcode'].upper().replace(' ', '').strip() not in exclude_postcodes
+            and not is_excluded(w)
         ]
 
         if not candidates:
-            # If all were excluded, relax exclusion
+            # Relax exclusion if nothing left, but still apply keyword exclusion
+            candidates = [
+                w for w in REAL_UK_WAREHOUSES
+                if w['carrier'] in (carrier_key, 'All')
+                and not any(kw in w['name'].upper() for kw in ALWAYS_EXCLUDE_KEYWORDS)
+            ]
+        if not candidates:
             candidates = [w for w in REAL_UK_WAREHOUSES if w['carrier'] in (carrier_key, 'All')]
 
         # Calculate distances to all candidate warehouses
@@ -459,8 +490,7 @@ class AddressProcessor:
 
         scored.sort(key=lambda s: s[0])
 
-        # Pick from the top 3 closest facilities to introduce natural variety
-        # while keeping the facility close and geographically relevant
+        # Pick from the top 3 closest facilities for natural variety
         top_candidates = scored[:min(3, len(scored))]
         chosen_dist, chosen_wh = random.choice(top_candidates)
 
