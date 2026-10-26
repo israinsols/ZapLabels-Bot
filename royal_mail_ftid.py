@@ -1,3 +1,4 @@
+import os
 import cv2
 import numpy as np
 from PIL import Image
@@ -13,7 +14,9 @@ class RoyalMailFTID:
     
     @staticmethod
     def validate_warehouse(warehouse_name):
-        """Sirf Clipper ya GXO allow karo"""
+        """Check if warehouse is allowed"""
+        if not warehouse_name:
+            return False
         for allowed in RoyalMailFTID.ALLOWED_WAREHOUSES:
             if allowed.lower() in warehouse_name.lower():
                 return True
@@ -21,11 +24,10 @@ class RoyalMailFTID:
     
     @staticmethod
     def alter_tracking_number(tracking_text):
-        """Tracking number mein 1 digit change karo"""
+        """Alter 1 digit of the tracking number (Fallback utility)"""
         if not tracking_text or len(tracking_text) < 2:
             return tracking_text
         
-        # Last digit ko change karo
         chars = list(tracking_text)
         last_char = chars[-1]
         
@@ -33,7 +35,6 @@ class RoyalMailFTID:
             new_digit = str((int(last_char) + 1) % 10)
             chars[-1] = new_digit
         else:
-            # Letter hai toh next letter
             chars[-1] = chr(ord(last_char) + 1) if last_char != 'Z' else 'A'
         
         return ''.join(chars)
@@ -41,38 +42,45 @@ class RoyalMailFTID:
     @staticmethod
     def process_label(image_path, warehouse_name, warehouse_address, warehouse_postcode, output_path):
         """
-        Complete Royal Mail FTID processing
+        Complete Royal Mail FTID processing pipeline.
+        Uses RoyalMailProcessor to handle OCR, address replacement, and DataMatrix regeneration.
         """
-        # 1. Validate warehouse
-        if not RoyalMailFTID.validate_warehouse(warehouse_name):
-            raise ValueError(f"❌ Warehouse not allowed: {warehouse_name}. Use Clipper Logistics or GXO only.")
-        
         print("=" * 50)
         print("📦 Royal Mail FTID Processing")
         print("=" * 50)
         
-        # 2. Code128 barcode — DO NOT TOUCH
-        print("\n📌 Code128 barcode: UNCHANGED ✅")
+        # 1. Validate warehouse
+        if not RoyalMailFTID.validate_warehouse(warehouse_name):
+            print(f"⚠️ Warehouse {warehouse_name} not in allowed list. Proceeding with general logic.")
         
-        # 3. Written tracking number — change 1 digit
-        print("\n📌 Written tracking number: changing 1 digit...")
-        # TODO: OCR se tracking text extract karo
-        # new_tracking = RoyalMailFTID.alter_tracking_number(old_tracking)
+        # 2. Prepare warehouse data dict
+        warehouse_data = {
+            "name": warehouse_name,
+            "address": warehouse_address,
+            "postcode": warehouse_postcode
+        }
         
-        # 4. Delivery address → warehouse
-        print(f"\n📌 Delivery address: replacing with {warehouse_name}...")
-        
-        # 5. Sender address — remove
-        print("\n📌 Sender address: removing...")
-        
-        # 6. Order/reference numbers & small barcodes — remove
-        print("\n📌 Order/reference numbers & small barcodes: removing...")
-        
-        # 7. DataMatrix — update with warehouse name + postcode
-        print(f"\n📌 DataMatrix: updating with {warehouse_name} and {warehouse_postcode}...")
-        
-        print("\n" + "=" * 50)
-        print("✅ Royal Mail FTID Complete!")
-        print("=" * 50)
-        
-        return output_path
+        # 3. Call the actual processing logic from royal_mail_processor.py
+        try:
+            from royal_mail_processor import RoyalMailProcessor
+            
+            result = RoyalMailProcessor.process_royal_mail_label(
+                input_path=image_path,
+                warehouse=warehouse_data,
+                output_path=output_path
+            )
+            
+            if result and os.path.exists(output_path):
+                print("\n" + "=" * 50)
+                print("✅ Royal Mail FTID Complete!")
+                print("=" * 50)
+                return output_path
+            else:
+                print("❌ Processor failed to generate output.")
+                return None
+                
+        except Exception as e:
+            print(f"❌ Error in RoyalMailFTID processing: {e}")
+            import traceback
+            traceback.print_exc()
+            return None

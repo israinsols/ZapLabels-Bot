@@ -4,6 +4,7 @@ from pylibdmtx.pylibdmtx import decode, encode
 from PIL import Image
 import io
 import re
+import os
 
 class DataMatrixProcessor:
     
@@ -12,7 +13,6 @@ class DataMatrixProcessor:
         """
         Step 1: Label se Data Matrix detect karo (Supports Image paths, PDF files, and numpy arrays)
         """
-        import os
         if isinstance(image_input, np.ndarray):
             img = image_input
         elif isinstance(image_input, str):

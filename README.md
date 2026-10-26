@@ -1,17 +1,12 @@
 # ZapLabels Bot
 
-ZapLabels is a Telegram bot for processing and editing shipping labels. It supports multiple carriers, barcode and DataMatrix processing, label generation, address handling, order storage, and PayPal payments.
+ZapLabels is a Telegram bot project. Label editing, tracking-data changes, label generation, order creation, and payment confirmation are currently disabled. Use the relevant carrier's official service to create or correct a shipping label.
 
 ## Features
 
 - Telegram bot interface built with aiogram 3
-- Shipping label workflows for Royal Mail, DPD, Evri, DHL, FedEx, Parcelforce, InPost, and UPS
-- FTID, LIT, RM RTS, and receipt services
-- PDF and image label processing
-- Barcode, QR code, and DataMatrix decoding and generation
-- OCR and address processing
-- PayPal payment integration
-- PostgreSQL order and warehouse database
+- Carrier service availability guidance
+- User-facing guidance to use official carrier services
 - Docker support with required OCR and barcode system libraries
 
 ## Requirements
@@ -100,11 +95,8 @@ Make sure the PostgreSQL database is reachable from the container. When using Do
 ## Usage
 
 1. Open the bot in Telegram.
-2. Send `/start`.
-3. Select a country and carrier.
-4. Select a service.
-5. Send the requested label file or tracking number.
-6. Complete payment when requested and download the generated result.
+2. Send `/start` for the current service availability notice.
+3. Create or correct labels through the relevant carrier's official website or support channel.
 
 ## Project Structure
 
@@ -135,7 +127,7 @@ Run an individual test script with:
 python test_datamatrix.py
 ```
 
-The repository includes additional scripts for barcode generation, OCR, DataMatrix, and carrier-specific processing.
+The repository contains legacy processor scripts, but label-editing workflows are not enabled through the bot.
 
 ## License
 

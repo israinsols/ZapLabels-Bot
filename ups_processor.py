@@ -8,15 +8,13 @@ import barcode as barcode_lib
 from barcode.writer import ImageWriter
 import io
 import os
-
 import shutil
 
-# Set Tesseract path
+# Set Tesseract path safely for Windows and Linux (Railway)
 if shutil.which("tesseract"):
     pytesseract.pytesseract.tesseract_cmd = "tesseract"
 elif os.path.exists(r"C:\Program Files\Tesseract-OCR\tesseract.exe"):
     pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
-
 
 class UPSProcessor:
     
@@ -27,21 +25,21 @@ class UPSProcessor:
         """
         img = cv2.imread(image_path)
         if img is None:
-            raise ValueError("❌ Image not found or invalid")
+            raise ValueError("❌ Image/PDF not found or invalid format.")
         
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         h, w = gray.shape
         
         strategies = [
-            ("2x upscale",        cv2.resize(gray, (w*2, h*2), interpolation=cv2.INTER_CUBIC), 2.0, 0),
-            ("3x upscale",        cv2.resize(gray, (w*3, h*3), interpolation=cv2.INTER_CUBIC), 3.0, 0),
-            ("raw gray",          gray, 1.0, 0),
-            ("Otsu",              cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1], 1.0, 0),
-            ("adaptive",          cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2), 1.0, 0),
-            ("CLAHE",             cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8)).apply(gray), 1.0, 0),
-            ("sharpened",         cv2.filter2D(gray, -1, np.array([[0,-1,0],[-1,5,-1],[0,-1,0]])), 1.0, 0),
-            ("bottom half",       gray[h//2:, :], 1.0, h//2),
-            ("top half",          gray[:h//2, :], 1.0, 0),
+            ("2x upscale", cv2.resize(gray, (w*2, h*2), interpolation=cv2.INTER_CUBIC), 2.0, 0),
+            ("3x upscale", cv2.resize(gray, (w*3, h*3), interpolation=cv2.INTER_CUBIC), 3.0, 0),
+            ("raw gray", gray, 1.0, 0),
+            ("Otsu", cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1], 1.0, 0),
+            ("adaptive", cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2), 1.0, 0),
+            ("CLAHE", cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8)).apply(gray), 1.0, 0),
+            ("sharpened", cv2.filter2D(gray, -1, np.array([[0,-1,0],[-1,5,-1],[0,-1,0]])), 1.0, 0),
+            ("bottom half", gray[h//2:, :], 1.0, h//2),
+            ("top half", gray[:h//2, :], 1.0, 0),
         ]
         
         decoded = None
@@ -49,21 +47,24 @@ class UPSProcessor:
         successful_offset_y = 0
         
         for name, processed, scale, off_y in strategies:
-            print(f"   🔍 Trying strategy: {name}...")
-            current_decoded = pyzbar_decode(Image.fromarray(processed))
-            
-            # Prefer strategy that finds 1Z tracking barcode
-            has_1z = any('1Z' in d.data.decode('utf-8', errors='ignore') for d in current_decoded)
-            if has_1z or (current_decoded and not decoded):
-                decoded = current_decoded
-                successful_scale = scale
-                successful_offset_y = off_y
-                if has_1z:
-                    print(f"   ✅ Found 1Z UPS barcode with strategy: {name}")
-                    break
+            try:
+                current_decoded = pyzbar_decode(Image.fromarray(processed))
+                
+                if current_decoded:
+                    has_1z = any('1Z' in d.data.decode('utf-8', errors='ignore') for d in current_decoded)
+                    if has_1z or not decoded:
+                        decoded = current_decoded
+                        successful_scale = scale
+                        successful_offset_y = off_y
+                        if has_1z:
+                            print(f"   ✅ Found 1Z UPS barcode with strategy: {name}")
+                            break
+            except Exception as e:
+                continue # Skip if strategy fails
         
+        # FIX: Safely handle empty sequence without crashing
         if not decoded:
-            raise ValueError("❌ No barcode found in image after all strategies")
+            raise ValueError("❌ No barcode found in image after all strategies. Please upload a clearer label (JPG/PNG) or PDF.")
         
         barcodes = []
         for code in decoded:
@@ -252,6 +253,13 @@ class UPSProcessor:
             else:
                 print("⚠️ Could not regenerate UPS barcode.")
             
+            # FIX: RTS/Blank Image Fix - Ensure the final image is saved in correct BGR format
+            final_img = cv2.imread(output_path)
+            if final_img is not None:
+                if len(final_img.shape) == 2:
+                    final_img = cv2.cvtColor(final_img, cv2.COLOR_GRAY2BGR)
+                cv2.imwrite(output_path, final_img)
+
             print("\n" + "=" * 50)
             print("✅ UPS Label Processing Complete!")
             print(f"📁 Output: {output_path}")
