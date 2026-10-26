@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+from datetime import datetime
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
@@ -189,7 +190,9 @@ async def handle_file(message: types.Message, state: FSMContext):
     
     carrier = order.get('carrier', 'Royal Mail')
     service = order.get('service', 'FTID')
-    output_path = f"downloads/out_{os.path.basename(file_path)}"
+    
+    # FIX: Force output to .jpg so Telegram sends it properly
+    output_path = f"downloads/out_{os.path.splitext(os.path.basename(file_path))[0]}.jpg"
 
     # ===== CARRIER-BASED ROUTING =====
     if carrier == 'UPS':
@@ -199,11 +202,13 @@ async def handle_file(message: types.Message, state: FSMContext):
             warehouse = await AddressProcessor.find_nearest_warehouse(raw_postcode, carrier)
             if warehouse:
                 result = UPSProcessor.process_ups_label(file_path, warehouse, output_path)
-                if result:
+                if result and os.path.exists(output_path):
                     await message.answer(f"✅ *UPS Label Processed!*", parse_mode="Markdown")
                     await message.answer_document(FSInputFile(output_path), caption="📦 UPS label")
                 else:
-                    await message.answer("⚠️ *UPS processing failed.*")
+                    await message.answer("⚠️ *UPS processing failed or file not created.*")
+            else:
+                await message.answer("⚠️ *No UPS warehouse found.*")
         except Exception as e:
             await message.answer(f"⚠️ UPS error: {e}")
 
@@ -214,11 +219,13 @@ async def handle_file(message: types.Message, state: FSMContext):
             warehouse = await AddressProcessor.find_nearest_warehouse(raw_postcode, carrier)
             if warehouse:
                 result = DPDProcessor.process_dpd_label(file_path, warehouse, output_path)
-                if result:
+                if result and os.path.exists(output_path):
                     await message.answer(f"✅ *DPD Label Processed!*", parse_mode="Markdown")
                     await message.answer_document(FSInputFile(output_path), caption="📦 DPD label")
                 else:
                     await message.answer("⚠️ *DPD processing failed.*")
+            else:
+                await message.answer("⚠️ *No DPD warehouse found.*")
         except Exception as e:
             await message.answer(f"⚠️ DPD error: {e}")
 
@@ -229,11 +236,13 @@ async def handle_file(message: types.Message, state: FSMContext):
             warehouse = await AddressProcessor.find_nearest_warehouse(raw_postcode, carrier)
             if warehouse:
                 result = EvriProcessor.process_evri_label(file_path, warehouse, output_path)
-                if result:
+                if result and os.path.exists(output_path):
                     await message.answer(f"✅ *Evri Label Processed!*", parse_mode="Markdown")
                     await message.answer_document(FSInputFile(output_path), caption="📦 Evri label")
                 else:
                     await message.answer("⚠️ *Evri processing failed.*")
+            else:
+                await message.answer("⚠️ *No Evri warehouse found.*")
         except Exception as e:
             await message.answer(f"⚠️ Evri error: {e}")
 
@@ -244,11 +253,13 @@ async def handle_file(message: types.Message, state: FSMContext):
             warehouse = await AddressProcessor.find_nearest_warehouse(raw_postcode, carrier)
             if warehouse:
                 result = DHLProcessor.process_dhl_label(file_path, warehouse, output_path)
-                if result:
+                if result and os.path.exists(output_path):
                     await message.answer(f"✅ *DHL Label Processed!*", parse_mode="Markdown")
                     await message.answer_document(FSInputFile(output_path), caption="📦 DHL label")
                 else:
                     await message.answer("⚠️ *DHL processing failed.*")
+            else:
+                await message.answer("⚠️ *No DHL warehouse found.*")
         except Exception as e:
             await message.answer(f"⚠️ DHL error: {e}")
 
@@ -268,15 +279,13 @@ async def handle_file(message: types.Message, state: FSMContext):
 
             if warehouse:
                 if service == 'RM RTS':
-                    # RTS Pipeline: Only change return address (sender)
                     result = RoyalMailProcessor.process_rts_label(file_path, warehouse, output_path)
                     msg_text = "✅ *Royal Mail RTS Label Created!*"
                 else:
-                    # FTID Pipeline: Change delivery address + DataMatrix
                     result = RoyalMailProcessor.process_royal_mail_label(file_path, warehouse, output_path)
                     msg_text = "✅ *Royal Mail FTID Label Created!*"
 
-                if result:
+                if result and os.path.exists(output_path):
                     await message.answer(msg_text, parse_mode="Markdown")
                     await message.answer_document(FSInputFile(output_path), caption="📬 Your processed Royal Mail label")
                 else:

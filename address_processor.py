@@ -479,7 +479,11 @@ class AddressProcessor:
                 and not any(kw in w['name'].upper() for kw in ALWAYS_EXCLUDE_KEYWORDS)
             ]
         if not candidates:
-            candidates = [w for w in REAL_UK_WAREHOUSES if w['carrier'] in (carrier_key, 'All')]
+            # Some carriers, including Evri, do not yet have dedicated locations.
+            # Use other configured locations rather than passing an empty list to random.choice.
+            candidates = [w for w in REAL_UK_WAREHOUSES if not is_excluded(w)]
+        if not candidates:
+            raise ValueError(f"No warehouse locations are configured for {carrier}.")
 
         # Calculate distances to all candidate warehouses
         scored = []

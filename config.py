@@ -12,6 +12,21 @@ class Config:
     PAYPAL_SECRET = os.getenv("PAYPAL_SECRET", os.getenv("PAYPAL_CLIENT_SECRET", ""))
     PAYPAL_MODE = os.getenv("PAYPAL_MODE", "sandbox")  # sandbox ya live
 
+    # Pricing (Yeh add kiya gaya hai)
+    PRICING = {
+        "UK": {
+            "FTID": 15,
+            "LIT": 20,
+            "RM_RTS": 20,
+            "Receipt": 5
+        },
+        "USA": {"FTID": 15, "UPS_LIT": 20},
+        "Spain": {"FTID": 30},
+        "Germany": {"FTID": 30},
+        "Italy": {"FTID": 30},
+        "France": {"FTID": 30}
+    }
+
     # UK Carriers
     UK_CARRIERS = ["Royal Mail", "DPD", "Evri", "DHL", "FedEx", "Parcelforce", "InPost", "UPS"]
     
