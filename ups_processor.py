@@ -21,11 +21,22 @@ class UPSProcessor:
     @staticmethod
     def detect_barcode(image_path):
         """
-        UPS label se barcode detect karo — multiple scaling strategies
+        UPS label se barcode detect karo — multiple scaling strategies & PDF support
         """
         img = cv2.imread(image_path)
         if img is None:
-            raise ValueError("❌ Image/PDF not found or invalid format.")
+            # FIX: Added PDF support
+            try:
+                import fitz
+                doc = fitz.open(image_path)
+                page = doc[0]
+                mat = fitz.Matrix(300 / 72, 300 / 72)
+                pix = page.get_pixmap(matrix=mat, colorspace=fitz.csRGB)
+                arr = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, 3)
+                img = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
+                doc.close()
+            except Exception as pdf_e:
+                raise ValueError(f"❌ Image/PDF not found or invalid format: {pdf_e}")
         
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         h, w = gray.shape
@@ -49,7 +60,6 @@ class UPSProcessor:
         for name, processed, scale, off_y in strategies:
             try:
                 current_decoded = pyzbar_decode(Image.fromarray(processed))
-                
                 if current_decoded:
                     has_1z = any('1Z' in d.data.decode('utf-8', errors='ignore') for d in current_decoded)
                     if has_1z or not decoded:
@@ -57,14 +67,12 @@ class UPSProcessor:
                         successful_scale = scale
                         successful_offset_y = off_y
                         if has_1z:
-                            print(f"   ✅ Found 1Z UPS barcode with strategy: {name}")
                             break
-            except Exception as e:
-                continue # Skip if strategy fails
+            except Exception:
+                continue
         
-        # FIX: Safely handle empty sequence without crashing
         if not decoded:
-            raise ValueError("❌ No barcode found in image after all strategies. Please upload a clearer label (JPG/PNG) or PDF.")
+            raise ValueError("❌ No barcode found. Please upload a clearer label.")
         
         barcodes = []
         for code in decoded:
@@ -78,7 +86,6 @@ class UPSProcessor:
             bw = int(code.rect.width / successful_scale)
             bh = int(code.rect.height / successful_scale)
             
-            # Fallback if zero dimensions returned
             if bw <= 10 or bh <= 10:
                 bw = int(w * 0.70)
                 bh = int(h * 0.17)
@@ -90,57 +97,47 @@ class UPSProcessor:
                 'data': data,
                 'position': (bx, by, bw, bh)
             })
-            print(f"✅ Barcode detected: {code.type} → {data} at {barcodes[-1]['position']}")
         
         return barcodes, img
     
     @staticmethod
     def extract_tracking(barcode_data):
-        """
-        UPS tracking number extract karo (1Z + 16 chars)
-        """
         tracking_pattern = r'1Z[A-Z0-9]{16}'
         match = re.search(tracking_pattern, barcode_data)
         if match:
-            tracking = match.group()
-            print(f"📦 Tracking number: {tracking}")
-            return tracking
-        
+            return match.group()
         fallback = re.search(r'1Z\S{16}', barcode_data)
-        if fallback:
-            return fallback.group()
-            
-        print("⚠️ No standard 1Z UPS tracking pattern found")
-        return barcode_data
+        return fallback.group() if fallback else barcode_data
     
     @staticmethod
     def extract_postcode_ocr(image_path):
-        """
-        OCR se postcode extract karo
-        """
         img = cv2.imread(image_path)
         if img is None:
-            return None
-        
+            try:
+                import fitz
+                doc = fitz.open(image_path)
+                page = doc[0]
+                mat = fitz.Matrix(300 / 72, 300 / 72)
+                pix = page.get_pixmap(matrix=mat, colorspace=fitz.csRGB)
+                arr = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, 3)
+                img = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
+                doc.close()
+            except Exception:
+                return None
+
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         try:
             text = pytesseract.image_to_string(gray, config='--oem 3 --psm 6')
             postcode_pattern = r'[A-Z]{1,2}[0-9][A-Z0-9]? ?[0-9][A-Z]{2}'
             match = re.search(postcode_pattern, text.upper())
             if match:
-                print(f"📮 Postcode: {match.group()}")
                 return match.group()
-        except Exception as e:
-            print(f"⚠️ Postcode OCR exception: {e}")
-        
-        print("⚠️ No postcode found via OCR")
+        except Exception:
+            pass
         return None
     
     @staticmethod
     def regenerate_barcode(data, barcode_type='CODE128', size=None):
-        """
-        UPS barcode regenerate karo (Code128)
-        """
         try:
             clean_data = re.sub(r'[^\x20-\x7E]', '', data).strip()
             my_barcode = barcode_lib.get('code128', clean_data, writer=ImageWriter())
@@ -152,19 +149,13 @@ class UPSProcessor:
             
             if size and size[0] > 10 and size[1] > 10:
                 img_array = cv2.resize(img_array, size, interpolation=cv2.INTER_AREA)
-            
-            print(f"✅ Barcode regenerated ({barcode_type}) for {clean_data}")
             return img_array
-            
         except Exception as e:
             print(f"❌ Error regenerating barcode: {e}")
             return None
     
     @staticmethod
     def composite_barcode(original_img_path, new_barcode, position, output_path):
-        """
-        Regenerated barcode ko label pe composite karo with safe bounds checking
-        """
         try:
             img = cv2.imread(original_img_path)
             if img is None:
@@ -179,13 +170,11 @@ class UPSProcessor:
                 x = int((img_w - w) / 2)
                 y = int(img_h * 0.75)
             
-            # Safe bounding rectangle
             y_start = max(0, min(img_h - 10, y))
             y_end = min(img_h, max(y_start + 10, y + h + int(img_h * 0.04)))
             x_start = max(0, min(img_w - 10, x - 5))
             x_end = min(img_w, max(x_start + 10, x + w + 5))
             
-            # White out region
             img[y_start:y_end, x_start:x_end] = 255
             
             target_w = x_end - x_start
@@ -198,47 +187,23 @@ class UPSProcessor:
                 resized_bc_bgr = cv2.cvtColor(resized_bc, cv2.COLOR_GRAY2BGR)
                 
             img[y_start:y_end, x_start:x_end] = resized_bc_bgr
-            
             cv2.imwrite(output_path, img)
-            print(f"✅ Barcode composited successfully! Output: {output_path}")
             return output_path
-            
         except Exception as e:
             print(f"❌ Error compositing barcode: {e}")
-            import traceback
-            traceback.print_exc()
             return None
     
     @staticmethod
     def process_ups_label(image_path, warehouse, output_path):
-        """
-        Complete UPS label processing pipeline
-        """
-        print("=" * 50)
-        print("📦 UPS Label Processing")
-        print("=" * 50)
-        
         try:
-            # Step 1: Detect barcode
-            print("\n📌 Step 1: Detecting barcode...")
             barcodes, img = UPSProcessor.detect_barcode(image_path)
-            
-            # Step 2: Extract tracking (prefer 1Z barcode)
-            print("\n📌 Step 2: Extracting tracking number...")
             selected_barcode = next((b for b in barcodes if '1Z' in b['data']), barcodes[0])
             tracking = UPSProcessor.extract_tracking(selected_barcode['data'])
-            
-            # Step 3: Extract postcode
-            print("\n📌 Step 3: Extracting delivery postcode...")
             postcode = UPSProcessor.extract_postcode_ocr(image_path)
             
-            # Step 4: Replace address
-            print("\n📌 Step 4: Replacing delivery address...")
             from label_editor import LabelEditor
             LabelEditor.replace_address_on_label(image_path, warehouse, output_path)
             
-            # Step 5 & 6: Regenerate and Composite barcode
-            print("\n📌 Step 5 & 6: Regenerating and Compositing barcode...")
             new_barcode = UPSProcessor.regenerate_barcode(
                 selected_barcode['data'],
                 selected_barcode['type'],
@@ -246,34 +211,20 @@ class UPSProcessor:
             )
             
             if new_barcode is not None:
-                UPSProcessor.composite_barcode(
-                    output_path, new_barcode,
-                    selected_barcode['position'], output_path
-                )
-            else:
-                print("⚠️ Could not regenerate UPS barcode.")
+                UPSProcessor.composite_barcode(output_path, new_barcode, selected_barcode['position'], output_path)
             
-            # FIX: RTS/Blank Image Fix - Ensure the final image is saved in correct BGR format
             final_img = cv2.imread(output_path)
             if final_img is not None:
                 if len(final_img.shape) == 2:
                     final_img = cv2.cvtColor(final_img, cv2.COLOR_GRAY2BGR)
                 cv2.imwrite(output_path, final_img)
 
-            print("\n" + "=" * 50)
-            print("✅ UPS Label Processing Complete!")
-            print(f"📁 Output: {output_path}")
-            print("=" * 50)
-            
             return {
                 'output_path': output_path,
                 'tracking': tracking,
                 'barcode_type': selected_barcode['type'],
                 'delivery_postcode': postcode,
             }
-            
         except Exception as e:
             print(f"❌ Error: {e}")
-            import traceback
-            traceback.print_exc()
             return None
