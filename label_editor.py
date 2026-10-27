@@ -16,45 +16,51 @@ class LabelEditor:
         h, w = img.shape[:2]
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         
-        # 1. Find the exact location of "SHIP TO" using OCR
+        # 1. OCR se exact "SHIP TO:" ka box dhoondein
         data = pytesseract.image_to_data(gray, config='--oem 3 --psm 6', output_type=pytesseract.Output.DICT)
         
-        address_x, address_y = None, None
+        ship_x, ship_y = None, None
         for i, text in enumerate(data['text']):
-            if "SHIP" in text.upper() or "TO:" in text.upper():
-                address_x = data['left'][i]
-                address_y = data['top'][i]
+            text_upper = text.upper()
+            # Sirf "SHIP TO" par focus karein, "FROM" ya "ADDRESS" par nahi
+            if "SHIP" in text_upper or text_upper == "TO:":
+                ship_x = data['left'][i]
+                ship_y = data['top'][i]
                 break
         
-        # Fallback agar SHIP TO na mile (Top Left area)
-        if address_x is None:
-            address_x = int(w * 0.05)
-            address_y = int(h * 0.15)
+        # 2. Box set karein
+        if ship_x is not None:
+            # SHIP TO ke thoda right aur neeche (Safe area)
+            x1 = ship_x + int(w * 0.06) 
+            y1 = ship_y + int(h * 0.02) 
+            # Box ki width aur height (Barcode se upar)
+            x2 = x1 + int(w * 0.40) 
+            y2 = y1 + int(h * 0.12) 
+        else:
+            # Fallback: Agar OCR fail ho jaye, toh fixed safe area (Top Left)
+            x1, y1 = int(w * 0.15), int(h * 0.12)
+            x2, y2 = int(w * 0.60), int(h * 0.28)
 
-        # 2. Set the box slightly below and to the right of "SHIP TO"
-        # But make sure it doesn't go too far down (saving the barcode)
-        x1 = address_x + int(w * 0.05) # 5% right of SHIP TO
-        y1 = address_y + int(h * 0.02) # 2% below SHIP TO
-        
-        # Width and Height of the white box
-        x2 = x1 + int(w * 0.35) 
-        y2 = y1 + int(h * 0.10) # Only cover 10% height (Address area only)
-        
-        # Safe check: ensure we don't overflow image
+        # Image bounds ke andar rakhein
         x1, y1 = max(0, x1), max(0, y1)
         x2, y2 = min(w, x2), min(h, y2)
 
-        # White out only the address text area
+        # 3. White out sirf address area
         cv2.rectangle(img, (x1, y1), (x2, y2), (255, 255, 255), -1)
         
-        # 3. Write New Address
+        # 4. Naya address likhein
         img_pil = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
         draw = ImageDraw.Draw(img_pil)
         
+        # Dynamic font size (taake text box ke andar fit ho jaye)
+        font_size = max(14, int(w * 0.018)) 
         try:
-            font = ImageFont.truetype("C:/Windows/Fonts/arial.ttf", 18)
+            font = ImageFont.truetype("C:/Windows/Fonts/arial.ttf", font_size)
         except:
-            font = ImageFont.load_default()
+            try:
+                font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", font_size)
+            except:
+                font = ImageFont.load_default()
             
         name = new_address_data.get('name', '3PL Warehouse')
         street = new_address_data.get('street', '')
@@ -63,12 +69,12 @@ class LabelEditor:
         
         address_text = f"TO NAME\n{name}\n{street}\n{city}\n{postcode}"
         
-        # Draw text inside the safe box
+        # Text draw karein
         draw.text((x1 + 5, y1 + 5), address_text, fill="black", font=font)
         
-        # 4. Save
+        # 5. Save karein
         img = cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
         cv2.imwrite(output_path, img, [int(cv2.IMWRITE_JPEG_QUALITY), 100])
         
-        print(f"✅ Address replaced carefully at ({x1}, {y1}) to ({x2}, {y2})")
+        print(f"✅ Address replaced safely at ({x1}, {y1})")
         return output_path
