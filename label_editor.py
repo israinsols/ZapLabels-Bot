@@ -14,24 +14,23 @@ class LabelEditor:
         
         h, w = img.shape[:2]
         
-        # FIX: Top-Left ka pura block (Sender + Receiver) white karne ke liye
-        # Left se 2% se shuru, Top se 2% se shuru
+        # FIX: Top ka PURA area (Left to Right) white kar dein taake koi purana text na bache
+        # (Barcode 0.36 height ke baad shuru hota hai, isliye 0.33 tak safe hai)
         x1 = int(w * 0.02) 
         y1 = int(h * 0.02) 
         
-        # Box ka end (Barcode aur DataMatrix se pehle hi khatam hoga)
-        x2 = int(w * 0.55) 
-        y2 = int(h * 0.30) 
+        x2 = int(w * 0.98) # Right side tak (taake right wala text bhi chhup jaye)
+        y2 = int(h * 0.33) # Neeche barcode se pehle tak
         
-        # Purane Sender aur Receiver ko pura white kar dein
+        # Purane pura top area ko white kar dein
         cv2.rectangle(img, (x1, y1), (x2, y2), (255, 255, 255), -1)
         
         # Naya Address likhein
         img_pil = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
         draw = ImageDraw.Draw(img_pil)
         
-        # Font size (Arial Bold, taake original jaisa lage)
-        font_size = max(14, int(w * 0.018)) 
+        # Font size (Arial Bold - original style)
+        font_size = max(14, int(w * 0.016)) 
         
         font = None
         try:
@@ -47,15 +46,15 @@ class LabelEditor:
         city = new_address_data.get('city', 'London')
         postcode = new_address_data.get('postcode', 'E1 6AN')
         
-        # Naya Address format (TO NAME ke sath)
+        # Naya Address (Sirf address, kuch purana nahi)
         address_text = f"SHIP TO:\nTO NAME\n{name}\n{street}\n{city}\n{postcode}"
         
-        # Text draw karein
-        draw.multiline_text((x1 + 15, y1 + 15), address_text, fill="black", font=font, spacing=4)
+        # Text draw karein (Left side par)
+        draw.multiline_text((x1 + 10, y1 + 10), address_text, fill="black", font=font, spacing=4)
         
         # Save
         img = cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
         cv2.imwrite(output_path, img, [int(cv2.IMWRITE_JPEG_QUALITY), 100])
         
-        print(f"✅ Top block cleared and new address applied safely.")
+        print(f"✅ Whole top area cleared and new address perfectly applied.")
         return output_path
