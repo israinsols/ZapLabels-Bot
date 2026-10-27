@@ -17,10 +17,9 @@ class LabelEditor:
         
         h, w = img.shape[:2]
         
-        # UPS Label ka "SHIP TO:" wala area (Barcode aur neeche wali cheezon se upar)
-        # X: Left se 15% (SHIP TO ke baad), Y: Top se 18% (SHIP TO ke neeche)
-        x1, y1 = int(w * 0.18), int(h * 0.15)
-        x2, y2 = int(w * 0.60), int(h * 0.35)
+        # FIX: White box ko thoda bada kiya hai taake purana text pura chhup jaye
+        x1, y1 = int(w * 0.15), int(h * 0.12)
+        x2, y2 = int(w * 0.65), int(h * 0.38)
         
         # Purane address ko white se dhak dein
         cv2.rectangle(img, (x1, y1), (x2, y2), (255, 255, 255), -1)
@@ -46,8 +45,8 @@ class LabelEditor:
         # Format address properly
         address_text = f"TO NAME\n{name}\n{street}\n{city}\n{postcode}"
         
-        # Text draw karein
-        draw.text((x1 + 10, y1 + 10), address_text, fill="black", font=font)
+        # FIX: Text ko thoda neeche (y1 + 30) se shuru kiya hai taake "SHIP TO:" kharab na ho
+        draw.text((x1 + 10, y1 + 30), address_text, fill="black", font=font)
         
         # Save karein (High quality)
         img = cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
