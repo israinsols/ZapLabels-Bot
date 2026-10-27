@@ -27,37 +27,36 @@ class LabelEditor:
                 ship_y = data['top'][i]
                 break
         
-        # 2. Define Safe Box (Barcode ko bachane ke liye)
+        # 2. Set the box (Barcode se upar tak)
         if ship_x is not None:
             x1 = ship_x + int(w * 0.06) 
-            y1 = ship_y + int(h * 0.02) 
-            x2 = x1 + int(w * 0.40) 
-            y2 = y1 + int(h * 0.15) # Thoda bada kiya taake pura text fit ho
+            y1 = ship_y + int(h * 0.01) 
+            x2 = x1 + int(w * 0.45) 
+            y2 = y1 + int(h * 0.20) # Box ko bada kar diya taake text pura aaye
         else:
-            x1, y1 = int(w * 0.15), int(h * 0.12)
-            x2, y2 = int(w * 0.60), int(h * 0.30)
+            x1, y1 = int(w * 0.15), int(h * 0.10)
+            x2, y2 = int(w * 0.65), int(h * 0.30)
 
         x1, y1 = max(0, x1), max(0, y1)
         x2, y2 = min(w, x2), min(h, y2)
 
+        # White out purana area
         cv2.rectangle(img, (x1, y1), (x2, y2), (255, 255, 255), -1)
         
-        # 3. Draw New Address (Using exact UPS style font)
+        # 3. Draw New Address
         img_pil = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
         draw = ImageDraw.Draw(img_pil)
         
-        # Font size adjust
-        font_size = max(14, int(w * 0.016)) 
+        # Font size thoda bada kiya hai
+        font_size = max(16, int(w * 0.018)) 
         
-        # UPS font style (Monospace/Courier New Bold)
         font = None
         try:
-            # Try to load Windows Courier New Bold (matches UPS font)
-            font = ImageFont.truetype("C:/Windows/Fonts/courbd.ttf", font_size)
+            # Arial Bold (Har system par chalta hai)
+            font = ImageFont.truetype("arialbd.ttf", font_size)
         except:
             try:
-                # Fallback to Arial Bold
-                font = ImageFont.truetype("C:/Windows/Fonts/arialbd.ttf", font_size)
+                font = ImageFont.truetype("/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf", font_size)
             except:
                 font = ImageFont.load_default()
             
@@ -66,15 +65,14 @@ class LabelEditor:
         city = new_address_data.get('city', 'London')
         postcode = new_address_data.get('postcode', 'E1 6AN')
         
-        # Address format
         address_text = f"TO NAME\n{name}\n{street}\n{city}\n{postcode}"
         
-        # Text draw karein (with 2px gap between lines to match original)
+        # Text draw karein
         draw.multiline_text((x1 + 5, y1 + 5), address_text, fill="black", font=font, spacing=4)
         
         # 4. Save
         img = cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
         cv2.imwrite(output_path, img, [int(cv2.IMWRITE_JPEG_QUALITY), 100])
         
-        print(f"✅ Address replaced with UPS-style font!")
+        print(f"✅ Address replaced with Arial Bold font!")
         return output_path
