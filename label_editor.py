@@ -21,7 +21,7 @@ class LabelEditor:
         
         # Box ka end (Barcode aur DataMatrix se pehle hi khatam hoga)
         x2 = int(w * 0.55) 
-        y2 = int(h * 0.25) 
+        y2 = int(h * 0.30) 
         
         # Purane Sender aur Receiver ko pura white kar dein
         cv2.rectangle(img, (x1, y1), (x2, y2), (255, 255, 255), -1)
