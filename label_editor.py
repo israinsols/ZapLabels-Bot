@@ -14,13 +14,12 @@ class LabelEditor:
         
         h, w = img.shape[:2]
         
-        # FIX: Top ka PURA area (Left to Right) white kar dein taake koi purana text na bache
-        # (Barcode 0.36 height ke baad shuru hota hai, isliye 0.33 tak safe hai)
-        x1 = int(w * 0.02) 
-        y1 = int(h * 0.02) 
+        # FIX: Box ko aur bada kiya hai taake upar ka pura text chhup jaye
+        x1 = int(w * 0.01)  # Left se 1% 
+        y1 = int(h * 0.01)  # Top se 1% 
         
-        x2 = int(w * 0.98) # Right side tak (taake right wala text bhi chhup jaye)
-        y2 = int(h * 0.33) # Neeche barcode se pehle tak
+        x2 = int(w * 0.99)  # Right side tak (99%)
+        y2 = int(h * 0.38)  # Neeche tak (Barcode se pehle tak)
         
         # Purane pura top area ko white kar dein
         cv2.rectangle(img, (x1, y1), (x2, y2), (255, 255, 255), -1)
@@ -49,8 +48,8 @@ class LabelEditor:
         # Naya Address (Sirf address, kuch purana nahi)
         address_text = f"SHIP TO:\nTO NAME\n{name}\n{street}\n{city}\n{postcode}"
         
-        # Text draw karein (Left side par)
-        draw.multiline_text((x1 + 10, y1 + 10), address_text, fill="black", font=font, spacing=4)
+        # Text draw karein (Left side par, thoda neeche se taake border na kate)
+        draw.multiline_text((x1 + 20, y1 + 20), address_text, fill="black", font=font, spacing=5)
         
         # Save
         img = cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
