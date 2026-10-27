@@ -14,28 +14,25 @@ class LabelEditor:
         
         h, w = img.shape[:2]
         
-        # FIX: OCR ko hata kar direct safe coordinates use kar rahe hain
-        # Yeh area sirf address ke liye reserve hai (barcode se upar)
-        x1 = int(w * 0.15) # Left se thoda aage
-        y1 = int(h * 0.10) # Top se thoda neeche
+        # FIX: Box ko bada kiya hai taake pura purana address chhup jaye
+        x1 = int(w * 0.15) 
+        y1 = int(h * 0.10) 
         
-        # Box ki width aur height
-        x2 = int(w * 0.65)
-        y2 = int(h * 0.28) # Neeche wale barcode se upar tak
+        x2 = int(w * 0.75) # Width barha di
+        y2 = int(h * 0.32) # Height barha di taake purana text pura dhak jaye
         
-        # Purane address ko pura white kar dein
+        # Purane address ko white kar dein
         cv2.rectangle(img, (x1, y1), (x2, y2), (255, 255, 255), -1)
         
         # Naya Address likhein
         img_pil = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
         draw = ImageDraw.Draw(img_pil)
         
-        # Font size
-        font_size = max(16, int(w * 0.018)) 
+        # FIX: Font size chota kiya hai taake naya address box ke andar fit ho jaye
+        font_size = max(12, int(w * 0.015)) 
         
         font = None
         try:
-            # Arial Bold (Original jaisa)
             font = ImageFont.truetype("arialbd.ttf", font_size)
         except:
             try:
@@ -51,12 +48,12 @@ class LabelEditor:
         # Naya address format
         address_text = f"TO NAME\n{name}\n{street}\n{city}\n{postcode}"
         
-        # Text draw karein (y1 + 10 se shuru karein taake saaf lage)
+        # Text draw karein
         draw.multiline_text((x1 + 10, y1 + 10), address_text, fill="black", font=font, spacing=5)
         
         # Save
         img = cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
         cv2.imwrite(output_path, img, [int(cv2.IMWRITE_JPEG_QUALITY), 100])
         
-        print(f"✅ Address replaced cleanly without any leftover text.")
+        print(f"✅ Address replaced cleanly. Box size increased.")
         return output_path
