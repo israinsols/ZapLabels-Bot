@@ -35,7 +35,7 @@ class LabelEditor:
             y1 = ship_y + int(h * 0.02) 
             # Box ki width aur height (Barcode se upar)
             x2 = x1 + int(w * 0.40) 
-            y2 = y1 + int(h * 0.12) 
+            y2 = y1 + int(h * 0.16) 
         else:
             # Fallback: Agar OCR fail ho jaye, toh fixed safe area (Top Left)
             x1, y1 = int(w * 0.15), int(h * 0.12)
