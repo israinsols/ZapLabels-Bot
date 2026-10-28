@@ -12,13 +12,13 @@ class UPSProcessor:
     @staticmethod
     def process_ups_label(image_path, warehouse, output_path):
         try:
-            print("📦 Processing UPS Label (Manual PDF Mode)...")
+            print("📦 Processing UPS Label (Exact Official UPS Format)...")
             
             # 1. PDF ko Image mein convert karein
             if image_path.lower().endswith('.pdf'):
                 doc = fitz.open(image_path)
                 page = doc[0]
-                mat = fitz.Matrix(3.0, 3.0) # High resolution
+                mat = fitz.Matrix(3.0, 3.0)  # High resolution
                 pix = page.get_pixmap(matrix=mat)
                 img_array = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)
                 
@@ -34,8 +34,8 @@ class UPSProcessor:
             else:
                 source_path = image_path
 
-            # 2. Address Replace
-            result = LabelEditor.replace_address_on_label(source_path, warehouse, output_path)
+            # 2. Address Replace using UPS-specific exact template layout
+            result = LabelEditor.replace_ups_address(source_path, warehouse, output_path)
             
             # 3. Temp file cleanup
             if image_path.lower().endswith('.pdf') and os.path.exists(source_path):
