@@ -40,7 +40,8 @@ class LabelEditor:
     def replace_ups_address(image_path, new_address_data, output_path):
         """
         Specialized UPS address replacer matching official UPS label typography and layout:
-        - Preserves return address (top-left) and weight/package count (top-center/right) completely
+        - Dynamically detects outer black borders (if present) or clears flush to margin (if borderless)
+        - Preserves return address (top-left) and shipment metadata / weight (top-right) completely
         - Preserves horizontal divider line and barcode/routing section below
         - Formats SHIP TO block with authentic indentation and large bold City/State/Zip
         """
@@ -50,9 +51,33 @@ class LabelEditor:
             return None
         
         h, w = img.shape[:2]
-
-        # 1. Detect horizontal divider line (around 30% to 42% height)
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+        # 1. Detect dynamic left and right margins based on border presence
+        col_means = np.mean(gray, axis=0)
+        has_left_border = np.mean(col_means[:max(1, int(w * 0.02))]) < 100
+        if has_left_border:
+            left_border_end = 0
+            for x in range(int(w * 0.08)):
+                if col_means[x] > 180:
+                    left_border_end = x
+                    break
+            x1 = left_border_end + 1
+        else:
+            x1 = 0  # Borderless label: clear completely to the edge to avoid ghost characters
+
+        has_right_border = np.mean(col_means[-max(1, int(w * 0.02)):]) < 100
+        if has_right_border:
+            right_border_start = w
+            for x in range(w - 1, int(w * 0.92), -1):
+                if col_means[x] > 180:
+                    right_border_start = x
+                    break
+            x2 = right_border_start - 1
+        else:
+            x2 = w
+
+        # 2. Detect horizontal divider line (around 28% to 42% height)
         _, thresh = cv2.threshold(gray, 128, 255, cv2.THRESH_BINARY_INV)
         kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (int(w * 0.4), 1))
         lines_img = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)
@@ -65,8 +90,8 @@ class LabelEditor:
                 divider_y = y
                 break
 
-        # 2. Detect gap below return address (around 9% to 14% height)
-        top_sub = thresh[int(h * 0.02):divider_y, int(w * 0.05):int(w * 0.4)]
+        # 3. Detect gap below return address (around 9% to 14% height)
+        top_sub = thresh[int(h * 0.02):divider_y, x1:int(w * 0.45)]
         row_activity = np.sum(top_sub > 0, axis=1)
         y_start = int(h * 0.115)
         for rel_y, act in enumerate(row_activity):
@@ -75,15 +100,20 @@ class LabelEditor:
                 y_start = actual_y
                 break
 
-        # 3. Clean whiteout box covering ONLY the SHIP TO section
-        x1 = int(w * 0.05)
-        x2 = int(w * 0.94)
+        # 4. Find return address left alignment
+        top_text = np.where(gray[int(h * 0.02):int(h * 0.10), x1:int(w * 0.45)] < 128)
+        if len(top_text[1]) > 0:
+            align_x = x1 + int(np.percentile(top_text[1], 1))
+        else:
+            align_x = x1 + (int(w * 0.052) if has_left_border else int(w * 0.02))
+
+        # 5. Clean whiteout box covering ONLY the SHIP TO section
         y1 = y_start + max(2, int(h * 0.005))
         y2 = divider_y - max(2, int(h * 0.003))
 
         cv2.rectangle(img, (x1, y1), (x2, y2), (255, 255, 255), -1)
 
-        # 4. Parse address components
+        # 6. Parse address components
         name = new_address_data.get('name') or new_address_data.get('company') or new_address_data.get('company_name', '')
         street = new_address_data.get('street', '')
         raw_addr = new_address_data.get('address') or new_address_data.get('address1', '')
@@ -108,7 +138,7 @@ class LabelEditor:
             city_line_parts.append(postcode.upper())
         city_state_zip = ' '.join(city_line_parts)
 
-        # 5. Fonts scaled proportionally
+        # 7. Fonts scaled proportionally
         font_label = LabelEditor._get_font(bold=True, size=max(12, int(w * 0.034)))
         font_name = LabelEditor._get_font(bold=True, size=max(11, int(w * 0.030)))
         font_street = LabelEditor._get_font(bold=True, size=max(11, int(w * 0.028)))
@@ -117,9 +147,9 @@ class LabelEditor:
         img_pil = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
         draw = ImageDraw.Draw(img_pil)
 
-        ship_to_x = int(w * 0.052)
+        ship_to_x = align_x
         ship_to_y = y1 + int(h * 0.015)
-        indent_x = int(w * 0.106)
+        indent_x = align_x + max(14, int(w * 0.055))
         line_spacing = max(12, int(h * 0.020))
 
         # Line 1: SHIP TO:
@@ -167,7 +197,6 @@ class LabelEditor:
         
         font_size = max(12, int(w * 0.025)) 
         font = LabelEditor._get_font(bold=False, size=font_size)
-        font_bold = LabelEditor._get_font(bold=True, size=max(13, int(w * 0.028)))
             
         name = new_address_data.get('name') or new_address_data.get('company_name', '')
         street = new_address_data.get('street') or new_address_data.get('address', '')
