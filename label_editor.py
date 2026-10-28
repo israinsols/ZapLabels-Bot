@@ -40,7 +40,8 @@ class LabelEditor:
     def replace_ups_address(image_path, new_address_data, output_path):
         """
         Specialized UPS address replacer matching official UPS label typography and layout:
-        - Dynamically detects outer black borders (if present) or clears flush to margin (if borderless)
+        - Detects real continuous outer black border lines (if present)
+        - If borderless, clears flush from x=0 to w to completely eradicate any ghost characters
         - Preserves return address (top-left) and shipment metadata / weight (top-right) completely
         - Preserves horizontal divider line and barcode/routing section below
         - Formats SHIP TO block with authentic indentation and large bold City/State/Zip
@@ -53,31 +54,15 @@ class LabelEditor:
         h, w = img.shape[:2]
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
-        # 1. Detect dynamic left and right margins based on border presence
-        col_means = np.mean(gray, axis=0)
-        has_left_border = np.mean(col_means[:max(1, int(w * 0.02))]) < 100
-        if has_left_border:
-            left_border_end = 0
-            for x in range(int(w * 0.08)):
-                if col_means[x] > 180:
-                    left_border_end = x
-                    break
-            x1 = left_border_end + 1
-        else:
-            x1 = 0  # Borderless label: clear completely to the edge to avoid ghost characters
+        # 1. Detect actual continuous vertical black border lines (if any)
+        # A true border column must be at least 70% solid black (< 80) from top to bottom
+        left_border_cols = [x for x in range(int(w * 0.1)) if np.mean(gray[:, x] < 80) > 0.70]
+        x1 = (left_border_cols[-1] + 1) if left_border_cols else 0
 
-        has_right_border = np.mean(col_means[-max(1, int(w * 0.02)):]) < 100
-        if has_right_border:
-            right_border_start = w
-            for x in range(w - 1, int(w * 0.92), -1):
-                if col_means[x] > 180:
-                    right_border_start = x
-                    break
-            x2 = right_border_start - 1
-        else:
-            x2 = w
+        right_border_cols = [x for x in range(w - 1, int(w * 0.90), -1) if np.mean(gray[:, x] < 80) > 0.70]
+        x2 = (right_border_cols[-1] - 1) if right_border_cols else w
 
-        # 2. Detect horizontal divider line (around 28% to 42% height)
+        # 2. Detect divider line (horizontal line at ~28% to 42% height)
         _, thresh = cv2.threshold(gray, 128, 255, cv2.THRESH_BINARY_INV)
         kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (int(w * 0.4), 1))
         lines_img = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)
@@ -105,7 +90,7 @@ class LabelEditor:
         if len(top_text[1]) > 0:
             align_x = x1 + int(np.percentile(top_text[1], 1))
         else:
-            align_x = x1 + (int(w * 0.052) if has_left_border else int(w * 0.02))
+            align_x = x1 + (int(w * 0.052) if left_border_cols else int(w * 0.02))
 
         # 5. Clean whiteout box covering ONLY the SHIP TO section
         y1 = y_start + max(2, int(h * 0.005))
